@@ -84,3 +84,44 @@ class GraphStore:
     def close(self) -> None:
         self.connection.commit()
         self.connection.close()
+
+    def fetch_nodes(self) -> list[Node]:
+        cursor = self.connection.execute(
+            """
+            SELECT id, type, label, properties
+            FROM nodes
+            ORDER BY type, label
+            """
+        )
+        nodes: list[Node] = []
+        for row in cursor.fetchall():
+            nodes.append(
+                Node(
+                    node_id=row["id"],
+                    node_type=row["type"],
+                    label=row["label"],
+                    properties=json.loads(row["properties"]),
+                )
+            )
+        return nodes
+
+    def fetch_edges(self) -> list[Edge]:
+        cursor = self.connection.execute(
+            """
+            SELECT source_id, target_id, type, weight, properties
+            FROM edges
+            ORDER BY id
+            """
+        )
+        edges: list[Edge] = []
+        for row in cursor.fetchall():
+            edges.append(
+                Edge(
+                    source_id=row["source_id"],
+                    target_id=row["target_id"],
+                    edge_type=row["type"],
+                    weight=row["weight"],
+                    properties=json.loads(row["properties"]),
+                )
+            )
+        return edges
