@@ -1,0 +1,11 @@
+.cleo/
+__pycache__/
+.venv/
+.env
+*.egg-info/
+apps/desktop-macos/.build/
+apps/desktop-macos/dist/
+apps/desktop-macos/__pycache__/
+node_modules/
+dist/
+build/
