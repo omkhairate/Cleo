@@ -1,5 +1,10 @@
 # Cleo
 
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20API%20%7C%20CLI-111111?style=flat-square)
+![Local First](https://img.shields.io/badge/local--first-yes-1f6feb?style=flat-square)
+![Model](https://img.shields.io/badge/default%20model-SmolVLM%20500M-6f42c1?style=flat-square)
+[![License: MIT](https://img.shields.io/badge/license-MIT-2ea043?style=flat-square)](LICENSE)
+
 Cleo is an app-first personal AI assistant built to feel local, fast, and ambient.
 
 Instead of living only in a browser tab, Cleo is designed to sit on your Mac like Spotlight: summon it with a hotkey, pin it near your pointer, ask about what is on screen, hand it direct actions, and let it keep a lightweight graph memory of how your tools, preferences, and tasks connect.
@@ -11,6 +16,14 @@ Cleo is open source under the MIT License.
 Cleo is a local-first assistant for people who want AI to feel embedded in their actual workflow instead of trapped in a chat tab. It combines a native macOS overlay, pointer-aware visual context, lightweight graph memory, and specialist action routing so you can ask questions, trigger actions, remember preferences, and work across tools through one coherent interface.
 
 The long-term idea is simple: one personal assistant, shared memory everywhere, and an interface that feels closer to Spotlight than to a generic chatbot.
+
+## Why Cleo?
+
+- It feels like a tool in your operating system, not a website you visit.
+- It keeps lightweight personal context through graph memory instead of hiding everything in one giant prompt.
+- It can route simple commands into direct actions quickly instead of forcing every request through a heavyweight model response.
+- It is built to stay useful even on modest local hardware.
+- It treats UI, pointer context, voice, memory, and automation as one experience.
 
 ## What Cleo Already Does
 
@@ -46,6 +59,18 @@ Cleo is organized around one shared assistant core and multiple thin clients:
           |
        mobile app
 ```
+
+## Preview
+
+Today, Cleo is centered around a native macOS overlay with:
+
+- a Spotlight-like summon flow
+- a pointer-pinned mini prompt
+- lightweight visual context capture
+- a menu bar presence
+- local-first command routing
+
+The current repo includes the desktop app assets, app icon, and the working overlay implementation in `apps/desktop-macos`.
 
 ## Current Model Strategy
 
