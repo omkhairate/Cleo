@@ -4,6 +4,8 @@ Cleo is an app-first personal AI assistant built to feel local, fast, and ambien
 
 Instead of living only in a browser tab, Cleo is designed to sit on your Mac like Spotlight: summon it with a hotkey, pin it near your pointer, ask about what is on screen, hand it direct actions, and let it keep a lightweight graph memory of how your tools, preferences, and tasks connect.
 
+Cleo is open source under the MIT License.
+
 ## What Cleo Already Does
 
 - Spotlight-style macOS overlay with glass UI
@@ -268,4 +270,4 @@ Near-term improvements that fit the current architecture well:
 
 ## License
 
-No license has been added yet. If you plan to open-source Cleo publicly, add a license before wider distribution.
+Cleo is released under the [MIT License](LICENSE).
