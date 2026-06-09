@@ -1,5 +1,7 @@
 # Cleo
 
+![Cleo header](docs/assets/cleo-header.svg)
+
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20API%20%7C%20CLI-111111?style=flat-square)
 ![Local First](https://img.shields.io/badge/local--first-yes-1f6feb?style=flat-square)
 ![Model](https://img.shields.io/badge/default%20model-SmolVLM%20500M-6f42c1?style=flat-square)
@@ -24,6 +26,20 @@ The long-term idea is simple: one personal assistant, shared memory everywhere, 
 - It can route simple commands into direct actions quickly instead of forcing every request through a heavyweight model response.
 - It is built to stay useful even on modest local hardware.
 - It treats UI, pointer context, voice, memory, and automation as one experience.
+
+## At a Glance
+
+| Capability | Cleo |
+| --- | --- |
+| Primary surface | Native macOS overlay |
+| Interaction style | Ask, command, point, speak |
+| Context model | Pointer-aware + visual + memory graph |
+| Memory | Persistent lightweight graph memory |
+| Action path | Deterministic specialist tools |
+| Local support | Yes |
+| Model strategy | Small local multimodal default |
+| Access points | Desktop, CLI, API, mobile scaffold |
+| License | MIT |
 
 ## What Cleo Already Does
 
