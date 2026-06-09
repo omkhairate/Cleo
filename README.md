@@ -78,6 +78,8 @@ Cleo is organized around one shared assistant core and multiple thin clients:
 
 ## Preview
 
+![Cleo macOS overlay](docs/assets/cleo-overlay-screenshot.png)
+
 Today, Cleo is centered around a native macOS overlay with:
 
 - a Spotlight-like summon flow
