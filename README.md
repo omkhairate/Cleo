@@ -6,6 +6,12 @@ Instead of living only in a browser tab, Cleo is designed to sit on your Mac lik
 
 Cleo is open source under the MIT License.
 
+## About
+
+Cleo is a local-first assistant for people who want AI to feel embedded in their actual workflow instead of trapped in a chat tab. It combines a native macOS overlay, pointer-aware visual context, lightweight graph memory, and specialist action routing so you can ask questions, trigger actions, remember preferences, and work across tools through one coherent interface.
+
+The long-term idea is simple: one personal assistant, shared memory everywhere, and an interface that feels closer to Spotlight than to a generic chatbot.
+
 ## What Cleo Already Does
 
 - Spotlight-style macOS overlay with glass UI
