@@ -24,6 +24,7 @@ from assistant_core.models import (
     VisualContextPayload,
 )
 from assistant_core.services.agent_workflow import AgentWorkflowService
+from assistant_core.services.argus_memory import ArgusGraphSync, ArgusMemoryClient
 from assistant_core.services.context_builder import ContextBuilder
 from assistant_core.services.llm import LLMError, RoutingLLMService
 from assistant_core.services.memory_extractor import MemoryExtractor
@@ -53,6 +54,8 @@ class AssistantOrchestrator:
         self.context_builder = ContextBuilder()
         self.memory_extractor = MemoryExtractor(self.memory, self.brain_graph)
         self.llm = RoutingLLMService(self.settings)
+        self.argus = ArgusMemoryClient(self.settings)
+        self.argus_graph_sync = ArgusGraphSync(self.argus, self.brain_graph)
         self.command_tools = CommandToolRegistry(
             self.settings,
             self.memory,
@@ -78,7 +81,11 @@ class AssistantOrchestrator:
         app_name = profile.display_name or "Cleo"
         graph = self.brain_graph.get_graph()
         history = self.conversations.get_history(user_id, conversation_id)
-        graph_summary = self.brain_graph.relevant_summary(model_message or request.message)
+        argus_context = self._argus_context_for_message(model_message or request.message)
+        message_for_model = model_message or request.message
+        if argus_context:
+            message_for_model = f"{message_for_model}\n\nArgus episodic memory context:\n{argus_context}"
+        graph_summary = self.brain_graph.relevant_summary(message_for_model)
         context = self.context_builder.build(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -97,7 +104,7 @@ class AssistantOrchestrator:
         try:
             llm_reply = self.llm.chat(
                 ChatRequest(
-                    message=model_message or request.message,
+                    message=message_for_model,
                     user_id=request.user_id,
                     conversation_id=request.conversation_id,
                 ),
@@ -120,7 +127,7 @@ class AssistantOrchestrator:
                 "Retry the same chat request once the local runtime is healthy.",
             ]
 
-        used_connectors = []
+        used_connectors = ["argus"] if argus_context else []
         lowered = request.message.lower()
         for connector in self.registry.list():
             if connector.key in lowered or connector.name.lower() in lowered:
@@ -148,6 +155,16 @@ class AssistantOrchestrator:
 
     def get_brain_graph(self) -> BrainGraph:
         return self.brain_graph.get_graph()
+
+    def query_argus_memory(self, query: str, limit: int = 8) -> dict:
+        return self.argus.query_memory(query, limit=limit)
+
+    def sync_argus_graph(self) -> BrainGraph:
+        graph, _ = self.argus_graph_sync.sync()
+        return graph
+
+    def ingest_argus_context(self, text: str, source: str = "cleo") -> dict:
+        return self.argus.ingest_context(text, source=source)
 
     def get_model_status(self) -> dict[str, str]:
         return self.llm.check_health()
@@ -534,6 +551,46 @@ class AssistantOrchestrator:
         profile = self.memory.get_profile(user_id)
         self.brain_graph.sync_profile(profile)
         return profile
+
+    def _argus_context_for_message(self, message: str) -> str:
+        if not self._should_query_argus(message):
+            return ""
+        try:
+            result = self.argus.query_memory(message, limit=4)
+        except Exception:
+            return ""
+        memories = result.get("memories", [])
+        if not memories:
+            return ""
+        lines = [result.get("answer", "")]
+        for memory in memories[:4]:
+            lines.append(
+                f"- {memory.get('captured_at')} [{memory.get('source')}] "
+                f"{memory.get('caption')} (score={memory.get('score')})"
+            )
+        return "\n".join(line for line in lines if line)
+
+    @staticmethod
+    def _should_query_argus(message: str) -> bool:
+        lowered = message.lower()
+        markers = [
+            "where did i",
+            "what did i",
+            "when did i",
+            "did i leave",
+            "where is my",
+            "earlier",
+            "today",
+            "yesterday",
+            "this morning",
+            "after lunch",
+            "before lunch",
+            "saw",
+            "wearing",
+            "charger",
+            "keys",
+        ]
+        return any(marker in lowered for marker in markers)
 
     def _classify_interaction_mode(self, message: str) -> str:
         stripped = message.strip()

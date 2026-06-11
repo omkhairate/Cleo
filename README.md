@@ -7,25 +7,39 @@
 ![Model](https://img.shields.io/badge/default%20model-SmolVLM%20500M-6f42c1?style=flat-square)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea043?style=flat-square)](LICENSE)
 
-Cleo is an app-first personal AI assistant built to feel local, fast, and ambient.
+Cleo is a local-first, app-native personal AI assistant designed to feel like part of your operating system rather than another browser tab.
 
-Instead of living only in a browser tab, Cleo is designed to sit on your Mac like Spotlight: summon it with a hotkey, pin it near your pointer, ask about what is on screen, hand it direct actions, and let it keep a lightweight graph memory of how your tools, preferences, and tasks connect.
+It combines a native macOS overlay, lightweight multimodal context, deterministic action routing, and persistent graph memory into one assistant surface. The goal is simple: fast access, grounded context, and practical automation across the tools you already use.
 
 Cleo is open source under the MIT License.
+
+## GitHub Metadata
+
+**Repository description**
+
+`A local-first, app-native personal AI assistant with a native macOS overlay, multimodal context, graph memory, and specialist action routing.`
+
+**Short tagline**
+
+`One personal assistant, shared memory, native presence.`
+
+**Suggested topics**
+
+`ai-assistant`, `macos`, `swiftui`, `python`, `local-first`, `multimodal`, `agentic-ai`, `graph-memory`, `desktop-ai`, `voice-interface`
 
 ## About
 
 Cleo is a local-first assistant for people who want AI to feel embedded in their actual workflow instead of trapped in a chat tab. It combines a native macOS overlay, pointer-aware visual context, lightweight graph memory, and specialist action routing so you can ask questions, trigger actions, remember preferences, and work across tools through one coherent interface.
 
-The long-term idea is simple: one personal assistant, shared memory everywhere, and an interface that feels closer to Spotlight than to a generic chatbot.
+The long-term direction is clear: one personal assistant, shared memory across surfaces, and an interaction model that feels closer to native system software than to a generic chatbot.
 
 ## Why Cleo?
 
-- It feels like a tool in your operating system, not a website you visit.
-- It keeps lightweight personal context through graph memory instead of hiding everything in one giant prompt.
-- It can route simple commands into direct actions quickly instead of forcing every request through a heavyweight model response.
-- It is built to stay useful even on modest local hardware.
-- It treats UI, pointer context, voice, memory, and automation as one experience.
+- It behaves like a native system tool, not a web app you visit occasionally.
+- It keeps lightweight personal context through graph memory instead of hiding everything inside one oversized prompt.
+- It can route practical requests into direct specialist actions instead of forcing every interaction through a single heavyweight response path.
+- It is designed to remain useful on modest local hardware.
+- It treats UI, pointer context, voice, memory, and automation as parts of one coherent product.
 
 ## At a Glance
 
@@ -124,6 +138,34 @@ Online routing is still supported, but optional.
 
 - `docs`
   Architecture notes and longer-form project thinking.
+
+## Argus Episodic Memory Add-On
+
+Cleo can connect to [Argus](https://github.com/omkhairate/argus) as a local episodic-memory service for wearable camera recall, day summaries, and graph sync.
+
+Run Cleo's API on its default port and Argus on `8010`:
+
+```bash
+uvicorn cleo_api.main:app --reload --port 8000
+uvicorn argus.api:app --reload --port 8010
+```
+
+Relevant Cleo environment variables:
+
+```env
+CLEO_ARGUS_ENABLED=true
+CLEO_ARGUS_BASE_URL=http://127.0.0.1:8010
+CLEO_ARGUS_TIMEOUT_SECONDS=60
+```
+
+CLI commands:
+
+```bash
+cleo argus-query "where did I leave my charger?"
+cleo argus-sync-graph
+```
+
+Cleo also uses Argus automatically for time-bound autobiographical questions such as “what did I do after lunch?” or “where did I leave my keys?” when Argus is available.
 
 ## Core Concepts
 

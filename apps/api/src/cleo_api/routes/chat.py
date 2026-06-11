@@ -2,6 +2,7 @@ import json
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from assistant_core.models import (
     BrainGraph,
@@ -24,6 +25,16 @@ from assistant_core.services.orchestrator import AssistantOrchestrator
 
 router = APIRouter()
 orchestrator = AssistantOrchestrator()
+
+
+class ArgusQueryRequest(BaseModel):
+    query: str
+    limit: int = 8
+
+
+class ArgusContextRequest(BaseModel):
+    text: str
+    source: str = "cleo"
 
 
 @router.post("/chat", response_model=ChatReply)
@@ -69,6 +80,21 @@ def list_connectors() -> list[ConnectorSummary]:
 @router.get("/brain-graph", response_model=BrainGraph)
 def brain_graph() -> BrainGraph:
     return orchestrator.get_brain_graph()
+
+
+@router.post("/argus/query")
+def argus_query(request: ArgusQueryRequest) -> dict:
+    return orchestrator.query_argus_memory(request.query, limit=request.limit)
+
+
+@router.post("/argus/context")
+def argus_context(request: ArgusContextRequest) -> dict:
+    return orchestrator.ingest_argus_context(request.text, source=request.source)
+
+
+@router.post("/argus/sync-graph", response_model=BrainGraph)
+def argus_sync_graph() -> BrainGraph:
+    return orchestrator.sync_argus_graph()
 
 
 @router.get("/model-status")

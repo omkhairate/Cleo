@@ -121,6 +121,31 @@ def brain_graph() -> None:
     typer.echo(json.dumps(response.json(), indent=2))
 
 
+@app.command("argus-query")
+def argus_query(query: str, limit: int = 8) -> None:
+    """Ask Argus episodic memory through the Cleo API."""
+    settings = get_settings()
+    response = httpx.post(
+        f"{settings.api_url}/argus/query",
+        json={"query": query, "limit": limit},
+        timeout=settings.api_timeout_seconds,
+    )
+    response.raise_for_status()
+    typer.echo(json.dumps(response.json(), indent=2))
+
+
+@app.command("argus-sync-graph")
+def argus_sync_graph() -> None:
+    """Sync Argus knowledge graph nodes into Cleo's brain graph."""
+    settings = get_settings()
+    response = httpx.post(
+        f"{settings.api_url}/argus/sync-graph",
+        timeout=settings.api_timeout_seconds,
+    )
+    response.raise_for_status()
+    typer.echo(json.dumps(response.json(), indent=2))
+
+
 @app.command("model-status")
 def model_status() -> None:
     """Check the local model runtime status."""

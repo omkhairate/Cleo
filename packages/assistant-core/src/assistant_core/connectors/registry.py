@@ -33,6 +33,12 @@ class ConnectorRegistry:
                 auth_required=False,
             ),
             ConnectorDefinition(
+                key="argus",
+                name="Argus",
+                description="Local episodic memory from wearable camera, timeline context, and graph sync.",
+                auth_required=False,
+            ),
+            ConnectorDefinition(
                 key="mcp",
                 name="MCP Tool Servers",
                 description="External tools exposed through the Model Context Protocol.",

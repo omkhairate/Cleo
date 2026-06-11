@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     api_timeout_seconds: float = 180.0
     conversation_history_limit: int = 12
     state_file_path: str = ".cleo/state.json"
+    argus_enabled: bool = True
+    argus_base_url: str = "http://127.0.0.1:8010"
+    argus_timeout_seconds: float = 60.0
 
     model_config = SettingsConfigDict(env_prefix="CLEO_", env_file=".env")
 
