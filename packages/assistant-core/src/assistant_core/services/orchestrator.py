@@ -484,10 +484,15 @@ class AssistantOrchestrator:
                 "Treat that selected text as the primary target and answer about that exact selection unless the user clearly asks for broader surrounding context.\n"
             )
         pointer_instruction = ""
-        if visual_context.source == "pointer-context":
+        if visual_context.source == "window-context":
             pointer_instruction = (
-                "No explicit text selection was detected. Use the attached pointer-centered image and nearby OCR as broader visual context, "
-                "but still prioritize the center of the captured region over surrounding page furniture.\n"
+                "No explicit text selection was detected. Use the attached full window or app capture as the broader visual context. "
+                "Prioritize the area near where the user invoked Cleo, but keep the rest of the visible application in mind.\n"
+            )
+        elif visual_context.source == "pointer-focus":
+            pointer_instruction = (
+                "No explicit text selection was detected. Use the attached pointer-centered image and nearby OCR as focused visual context, "
+                "prioritizing the center of the captured region over surrounding page furniture.\n"
             )
         return (
             "Visual context captured near the user's pointer is included below.\n"

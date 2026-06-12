@@ -10,11 +10,11 @@ struct OverlayView: View {
     }
 
     private var outerCornerRadius: CGFloat {
-        34
+        36
     }
 
     private var innerFieldCornerRadius: CGFloat {
-        22
+        24
     }
 
     private var showsPointerAnchorCue: Bool {
@@ -59,12 +59,12 @@ struct OverlayView: View {
                 .padding(.top, shellTopInset)
                 .padding(.bottom, shellBottomInset)
 
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
                 composerBar(
                     textSize: 21,
                     iconSize: 15,
-                    horizontalPadding: 22,
-                    verticalPadding: 15,
+                    horizontalPadding: 20,
+                    verticalPadding: 14,
                     showReturnHint: !isExpanded
                 )
 
@@ -81,7 +81,7 @@ struct OverlayView: View {
                     Spacer(minLength: 0)
                 }
             }
-            .padding(isExpanded ? 22 : 16)
+            .padding(isExpanded ? 20 : 16)
             .padding(.top, shellTopInset)
             .padding(.bottom, shellBottomInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -110,8 +110,8 @@ struct OverlayView: View {
 
     private var expandedContent: some View {
         HStack(alignment: .top, spacing: 18) {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Cleo")
@@ -127,7 +127,7 @@ struct OverlayView: View {
                         smallModeBadge
                     }
 
-                    HStack(spacing: 12) {
+                    HStack(alignment: .center, spacing: 14) {
                         Picker("Response Mode", selection: $viewModel.responseMode) {
                             ForEach(OverlayResponseMode.allCases) { mode in
                                 Text(mode.title).tag(mode)
@@ -135,6 +135,8 @@ struct OverlayView: View {
                         }
                         .pickerStyle(.segmented)
                         .frame(width: 220)
+
+                        subtleLabel(contextStatusLabel)
 
                         Spacer()
 
@@ -151,8 +153,8 @@ struct OverlayView: View {
                         }
                     }
                 }
-                .padding(16)
-                .panelSurface(cornerRadius: 24, fillOpacity: 0.055, strokeOpacity: 0.08)
+                .padding(18)
+                .panelSurface(cornerRadius: 26, fillOpacity: 0.05, strokeOpacity: 0.085)
 
                 if let importStatus = viewModel.importStatus, !importStatus.isEmpty {
                     compactStatusChip(importStatus)
@@ -186,11 +188,12 @@ struct OverlayView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Response")
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        Text(viewModel.lastInteractionMode == "command" ? "Command Session" : "Response")
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.white.opacity(0.78))
+                        subtleLabel(viewModel.lastInteractionMode == "command" ? "Specialist workflow" : "Conversation")
                         Spacer()
                     }
 
@@ -203,12 +206,16 @@ struct OverlayView: View {
                                 pendingWorkflowStrip
                             }
 
-                            Text(viewModel.response)
-                                .font(.system(size: 15, weight: .regular, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.92))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
+                            if viewModel.response == "Thinking..." && viewModel.isLoading {
+                                thinkingState
+                            } else {
+                                Text(viewModel.response)
+                                    .font(.system(size: 15, weight: .regular, design: .rounded))
+                                    .foregroundStyle(Color.white.opacity(0.92))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineSpacing(3)
+                                    .textSelection(.enabled)
+                            }
                         }
                     }
                     .frame(maxHeight: .infinity)
@@ -249,13 +256,18 @@ struct OverlayView: View {
         showReturnHint: Bool
     ) -> some View {
         HStack(spacing: 12) {
-            Group {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.08))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 1)
+
                 if let brandMark = CleoBranding.swiftUIMarkImage() {
                     brandMark
                         .resizable()
                         .renderingMode(.template)
                         .interpolation(.high)
-                        .frame(width: iconSize + 4, height: iconSize + 4)
+                        .frame(width: iconSize + 2, height: iconSize + 2)
                         .foregroundStyle(Color.white.opacity(0.82))
                 } else {
                     Image(systemName: "sparkles")
@@ -263,13 +275,14 @@ struct OverlayView: View {
                         .foregroundStyle(Color.white.opacity(0.56))
                 }
             }
-            .frame(width: 20, height: 20)
+            .frame(width: 30, height: 30)
 
             TextField("Ask or command Cleo...", text: $viewModel.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: textSize, weight: .medium, design: .rounded))
                 .foregroundStyle(.white)
                 .focused($composerFocused)
+                .submitLabel(.go)
                 .onTapGesture {
                     viewModel.expand()
                 }
@@ -282,9 +295,7 @@ struct OverlayView: View {
                     .tint(.white)
             } else {
                 if viewModel.visualContext != nil {
-                    Image(systemName: "viewfinder.circle.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.white.opacity(0.42))
+                    iconStatusChip(systemName: "viewfinder.circle.fill", title: "Context")
                 }
 
                 Button(action: {
@@ -293,18 +304,16 @@ struct OverlayView: View {
                     Image(systemName: viewModel.isListening ? "waveform.circle.fill" : "mic.fill")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(viewModel.isListening ? Color.white.opacity(0.95) : Color.white.opacity(0.48))
-                        .frame(width: 22, height: 22)
+                        .frame(width: 28, height: 28)
                         .background(
-                            Circle()
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(viewModel.isListening ? Color.white.opacity(0.16) : Color.clear)
                         )
                 }
                 .buttonStyle(.plain)
 
                 if showReturnHint && !viewModel.isListening {
-                    Text("↩")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.28))
+                    iconStatusChip(systemName: "arrow.turn.down.left", title: nil)
                 }
             }
         }
@@ -400,6 +409,44 @@ struct OverlayView: View {
             )
     }
 
+    private func subtleLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.55))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.07), lineWidth: 1)
+            )
+    }
+
+    private func iconStatusChip(systemName: String, title: String?) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemName)
+                .font(.system(size: 12, weight: .semibold))
+            if let title {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+        }
+        .foregroundStyle(Color.white.opacity(0.45))
+        .padding(.horizontal, title == nil ? 8 : 10)
+        .padding(.vertical, 7)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        )
+    }
+
     private func selectedTextChip(_ text: String) -> some View {
         Text("Selected: \(text)")
             .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -416,6 +463,17 @@ struct OverlayView: View {
                     .stroke(Color.white.opacity(0.1), lineWidth: 1)
             )
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var contextStatusLabel: String {
+        guard let context = viewModel.visualContext else {
+            return "No live context"
+        }
+        if let selectedText = context.selected_text,
+           !selectedText.isEmpty {
+            return "Selected text attached"
+        }
+        return "Visual context attached"
     }
 
     private func compactStatusChip(_ text: String) -> some View {
@@ -454,6 +512,35 @@ struct OverlayView: View {
         .overlay(
             Capsule(style: .continuous)
                 .stroke(Color.white.opacity(0.09), lineWidth: 1)
+        )
+    }
+
+    private var thinkingState: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .tint(.white.opacity(0.82))
+                Text("Cleo is working through this request.")
+                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+            }
+
+            Text(viewModel.lastInteractionMode == "command"
+                 ? "Actions and specialists are running, and the response will settle here when they finish."
+                 : "Context is being read and the reply will appear here as soon as it is ready.")
+                .font(.system(size: 13, weight: .regular, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.52))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
         )
     }
 
@@ -509,25 +596,33 @@ struct OverlayView: View {
                     ForEach(Array(viewModel.commandTasks.enumerated()), id: \.offset) { _, task in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 6) {
-                                Circle()
-                                    .fill(task.status == "completed" ? Color(red: 0.42, green: 0.88, blue: 0.62) : Color(red: 0.98, green: 0.72, blue: 0.34))
-                                    .frame(width: 8, height: 8)
                                 Text(task.specialist.capitalized)
                                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                                     .foregroundStyle(Color.white.opacity(0.74))
+                                Spacer(minLength: 4)
+                                Text(task.status.capitalized)
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .foregroundStyle(task.status == "completed" ? Color(red: 0.42, green: 0.88, blue: 0.62) : Color(red: 0.98, green: 0.72, blue: 0.34))
+                                    .padding(.horizontal, 7)
+                                    .padding(.vertical, 4)
+                                    .background(
+                                        Capsule(style: .continuous)
+                                            .fill(Color.white.opacity(0.05))
+                                    )
                             }
                             Text(task.title)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(Color.white.opacity(0.9))
                                 .lineLimit(2)
                                 .frame(width: 160, alignment: .leading)
-                            Text(task.status.capitalized)
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.5))
+                            Text(actionLabel(for: task))
+                                .font(.system(size: 10, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.white.opacity(0.52))
+                                .lineLimit(2)
                         }
-                        .padding(12)
-                        .frame(width: 180, alignment: .leading)
-                        .panelSurface(cornerRadius: 18, fillOpacity: 0.06, strokeOpacity: 0.09)
+                        .padding(13)
+                        .frame(width: 190, alignment: .leading)
+                        .panelSurface(cornerRadius: 20, fillOpacity: 0.055, strokeOpacity: 0.085)
                     }
                 }
             }

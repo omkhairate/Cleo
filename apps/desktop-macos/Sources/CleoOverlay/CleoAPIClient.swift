@@ -55,6 +55,10 @@ struct OverlayVisualContext: Codable {
     let ocr_text: String?
     let image_path: String?
     let region_description: String?
+
+    var isExplicitSelection: Bool {
+        selected_text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
 }
 
 struct OverlayPreference: Decodable {
@@ -313,6 +317,10 @@ actor CleoAPIClient {
     }
 
     private func makeLocalBridgeProcess(command: String) -> Process? {
+        if let bundledProcess = makeBundledLocalBridgeProcess(command: command) {
+            return bundledProcess
+        }
+
         guard let root = resolvedProjectRoot() else { return nil }
 
         let pythonURL = root.appendingPathComponent(".venv/bin/python3")
@@ -326,6 +334,32 @@ actor CleoAPIClient {
         process.executableURL = pythonURL
         process.arguments = [bridgeURL.path, command]
         return process
+    }
+
+    private func makeBundledLocalBridgeProcess(command: String) -> Process? {
+        guard let resourcesURL = Bundle.main.resourceURL else {
+            return nil
+        }
+
+        let runtimeURL = resourcesURL.appendingPathComponent("CleoRuntime", isDirectory: true)
+        let launcherURL = runtimeURL.appendingPathComponent("run_bridge.sh")
+        guard fileManager.fileExists(atPath: launcherURL.path) else {
+            return nil
+        }
+
+        let process = Process()
+        process.currentDirectoryURL = applicationSupportDirectory()
+        process.executableURL = launcherURL
+        process.arguments = [command]
+        return process
+    }
+
+    private func applicationSupportDirectory() -> URL {
+        let baseDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let cleoDirectory = baseDirectory.appendingPathComponent("Cleo", isDirectory: true)
+        try? fileManager.createDirectory(at: cleoDirectory, withIntermediateDirectories: true)
+        return cleoDirectory
     }
 
     private func resolvedProjectRoot() -> URL? {

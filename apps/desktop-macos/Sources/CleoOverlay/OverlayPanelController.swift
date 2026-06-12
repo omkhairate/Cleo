@@ -4,6 +4,15 @@ import SwiftUI
 
 @MainActor
 final class OverlayPanelController: NSObject, NSWindowDelegate {
+    private enum PointerPinnedRoute {
+        case explicitSelection
+        case recoveredSelection
+        case windowContext
+        case selectionPermissionBlocked
+        case screenRecordingBlocked
+        case captureFailed
+    }
+
     private let viewModel = OverlayViewModel()
     private let screenContextCapture = ScreenContextCapture()
     private var panel: SpotlightPanel?
@@ -73,12 +82,20 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         screenContextCapture.aggressiveSelectedTextSnapshot()
     }
 
-    func togglePointerPinned(at point: NSPoint, selectedText: String? = nil) {
+    func togglePointerPinned(
+        at point: NSPoint,
+        selectedText: String? = nil,
+        hadRecentSelectionIntent: Bool = false
+    ) {
         guard let panel else { return }
         if panel.isVisible, viewModel.summonStyle == .pointerPinned {
             hide()
         } else {
-            showPointerPinned(at: point, selectedText: selectedText)
+            showPointerPinned(
+                at: point,
+                selectedText: selectedText,
+                hadRecentSelectionIntent: hadRecentSelectionIntent
+            )
         }
     }
 
@@ -99,36 +116,49 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         viewModel.focusComposer()
     }
 
-    private func showPointerPinned(at point: NSPoint, selectedText: String?) {
+    private func showPointerPinned(
+        at point: NSPoint,
+        selectedText: String?,
+        hadRecentSelectionIntent: Bool
+    ) {
         guard let panel else { return }
 
         viewModel.summonStyle = .pointerPinned
         preferredAnchorPoint = point
         viewModel.setVisualContext(nil)
         let normalizedSelectedText = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let shouldPromptForSelectionAccess =
-            normalizedSelectedText != nil && normalizedSelectedText?.isEmpty == false
-        let selectionStatus = screenContextCapture.selectionCaptureStatus(
-            promptIfNeeded: shouldPromptForSelectionAccess
+        let routeResult = resolvePointerPinnedRoute(
+            at: point,
+            selectedText: normalizedSelectedText,
+            hadRecentSelectionIntent: hadRecentSelectionIntent
         )
-        let selectionContext =
-            screenContextCapture.captureSelectionContext(from: normalizedSelectedText) ??
-            screenContextCapture.captureSelectionContext()
-        let pointerContext = selectionContext == nil
-            ? screenContextCapture.capturePointerContext(at: point)
-            : nil
-        if let selectionContext {
-            viewModel.setVisualContext(selectionContext)
-            if let summary = selectionContext.summary {
-                viewModel.footer = "Visual context ready • \(summary)"
+
+        switch routeResult.route {
+        case .explicitSelection:
+            if let context = routeResult.context {
+                viewModel.setVisualContext(context)
+                viewModel.footer = context.summary.map { "Selected text ready • \($0)" } ?? "Selected text ready"
             }
-        } else if let pointerContext {
-            viewModel.setVisualContext(pointerContext)
-            if let contextSummary = pointerContext.summary {
-                viewModel.footer = "Visual context ready • \(contextSummary)"
+        case .recoveredSelection:
+            if let context = routeResult.context {
+                viewModel.setVisualContext(context)
+                viewModel.footer = context.summary.map { "Recovered selected text • \($0)" } ?? "Recovered selected text"
             }
-        } else if shouldPromptForSelectionAccess, selectionStatus == .accessibilityDenied {
+        case .windowContext:
+            if let context = routeResult.context {
+                viewModel.setVisualContext(context)
+                viewModel.footer = context.summary.map { "Full app context ready • \($0)" } ?? "Full app context ready"
+            }
+        case .selectionPermissionBlocked:
             viewModel.footer = "Selection capture needs macOS Accessibility access for Cleo."
+        case .screenRecordingBlocked:
+            viewModel.footer = "Full app context needs macOS Screen Recording access for Cleo."
+        case .captureFailed:
+            if hadRecentSelectionIntent {
+                viewModel.footer = "Cleo saw a recent selection, but macOS did not expose the highlighted text. Re-select it, then double-right-click again."
+            } else {
+                viewModel.footer = "Cleo could not capture the current app window yet. If Screen Recording is already enabled, fully quit and reopen Cleo once."
+            }
         }
 
         viewModel.prepareForPresentation()
@@ -141,11 +171,54 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         viewModel.focusComposer()
     }
 
+    private func resolvePointerPinnedRoute(
+        at point: NSPoint,
+        selectedText: String?,
+        hadRecentSelectionIntent: Bool
+    ) -> (route: PointerPinnedRoute, context: OverlayVisualContext?) {
+        if let selectedText, !selectedText.isEmpty {
+            return (
+                .explicitSelection,
+                screenContextCapture.captureExplicitSelectionContext(from: selectedText)
+            )
+        }
+
+        let selectionStatus = screenContextCapture.selectionCaptureStatus(promptIfNeeded: false)
+        if selectionStatus == .accessibilityDenied && hadRecentSelectionIntent {
+            return (.selectionPermissionBlocked, nil)
+        }
+
+        if let currentSelection = screenContextCapture.currentSelectedTextSnapshot(),
+           let context = screenContextCapture.captureExplicitSelectionContext(from: currentSelection) {
+            return (.explicitSelection, context)
+        }
+
+        if hadRecentSelectionIntent,
+           let recoveredSelection = screenContextCapture.aggressiveSelectedTextSnapshot(),
+           let context = screenContextCapture.captureExplicitSelectionContext(from: recoveredSelection) {
+            return (.recoveredSelection, context)
+        }
+
+        let screenCaptureStatus = screenContextCapture.screenCaptureStatus(promptIfNeeded: true)
+        guard screenCaptureStatus == .ready else {
+            return (.screenRecordingBlocked, nil)
+        }
+
+        if let context = screenContextCapture.captureWindowContext(at: point) {
+            return (.windowContext, context)
+        }
+
+        return (.captureFailed, nil)
+    }
+
     private func hide() {
         panel?.orderOut(nil)
     }
 
     func windowDidResignKey(_ notification: Notification) {
+        if NSApp.modalWindow != nil {
+            return
+        }
         hide()
     }
 

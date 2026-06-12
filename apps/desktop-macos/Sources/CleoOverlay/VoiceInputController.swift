@@ -16,7 +16,7 @@ final class VoiceInputController: @unchecked Sendable {
     private var latestTranscript = ""
     private(set) var isListening = false
 
-    func start(completion: @escaping (Result<Void, Error>) -> Void) {
+    func start(completion: @escaping @Sendable (Result<Void, Error>) -> Void) {
         guard !isListening else {
             completion(.success(()))
             return
@@ -79,13 +79,13 @@ final class VoiceInputController: @unchecked Sendable {
         }
     }
 
-    nonisolated private static func requestSpeechAuthorization(_ completion: @escaping (Bool) -> Void) {
+    nonisolated private static func requestSpeechAuthorization(_ completion: @escaping @Sendable (Bool) -> Void) {
         SFSpeechRecognizer.requestAuthorization { status in
             completion(status == .authorized)
         }
     }
 
-    nonisolated private static func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
+    nonisolated private static func requestMicrophoneAccess(_ completion: @escaping @Sendable (Bool) -> Void) {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             completion(granted)
         }

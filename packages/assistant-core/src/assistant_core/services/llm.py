@@ -37,6 +37,7 @@ class RoutingLLMService:
         self._smolvlm_processor = None
         self._smolvlm_model = None
         self._smolvlm_device = None
+        self._smolvlm_history_limit = 4
 
     def chat(
         self,
@@ -209,15 +210,17 @@ class RoutingLLMService:
                     return_tensors="pt",
                 )
             model_inputs = {key: value.to(device) for key, value in model_inputs.items()}
-            outputs = model.generate(
-                **model_inputs,
-                max_new_tokens=64,
-                do_sample=False,
-                repetition_penalty=1.15,
-                no_repeat_ngram_size=4,
-                eos_token_id=eos_token_id,
-                pad_token_id=pad_token_id,
-            )
+            import torch
+            with torch.inference_mode():
+                outputs = model.generate(
+                    **model_inputs,
+                    max_new_tokens=48,
+                    do_sample=False,
+                    repetition_penalty=1.12,
+                    no_repeat_ngram_size=4,
+                    eos_token_id=eos_token_id,
+                    pad_token_id=pad_token_id,
+                )
         except Exception as exc:  # noqa: BLE001
             raise LLMError(
                 "The local SmolVLM runtime failed while generating a response. "
@@ -454,7 +457,9 @@ class RoutingLLMService:
                 "text": self._build_visual_user_text(latest_user_message, visual_context),
             },
         ]
-        image_url = self._image_data_url(visual_context.image_path) if visual_context else None
+        image_url = None
+        if visual_context and not visual_context.selected_text:
+            image_url = self._image_data_url(visual_context.image_path)
         if image_url:
             user_content.append(
                 {
@@ -480,9 +485,15 @@ class RoutingLLMService:
         if visual_context.selected_text:
             instructions.append(
                 "The user explicitly selected this text before asking the question: "
-                f"'{visual_context.selected_text}'. Answer about that exact selected text first."
+                f"'{visual_context.selected_text}'. Treat that selected text as the entire target. "
+                "Do not broaden to the rest of the screen, document, or app unless the user explicitly asks for wider context."
             )
-        elif visual_context.source == "pointer-context":
+        elif visual_context.source == "window-context":
+            instructions.append(
+                "The user is asking about the broader application content visible in the attached full window or display capture. "
+                "Prioritize the area near where Cleo was invoked, but use the wider visible context if it helps."
+            )
+        elif visual_context.source == "pointer-focus":
             instructions.append(
                 "The user is asking about the content at the center of the attached image region."
             )
@@ -565,7 +576,7 @@ class RoutingLLMService:
             f"{system_prompt}\n"
             "Keep responses short, direct, and do not repeat yourself.<|im_end|>"
         ]
-        for message in history.messages:
+        for message in history.messages[-self._smolvlm_history_limit:]:
             role = "assistant" if message.role == "assistant" else "user"
             prompt_parts.append(
                 f"<|im_start|>{role}\n{message.content}<|im_end|>"

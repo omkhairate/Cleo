@@ -28,9 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pointerTracker.aggressiveSelectionProvider = { [weak controller] in
             controller?.aggressiveSelectedTextSnapshot()
         }
-        pointerTracker.onSecondaryDoubleClick = { [weak self] location, selectedText in
+        pointerTracker.onSecondaryDoubleClick = { [weak self] location, selectedText, hadRecentSelectionIntent in
             Task { @MainActor in
-                self?.overlayController?.togglePointerPinned(at: location, selectedText: selectedText)
+                self?.overlayController?.togglePointerPinned(
+                    at: location,
+                    selectedText: selectedText,
+                    hadRecentSelectionIntent: hadRecentSelectionIntent
+                )
             }
         }
         pointerTracker.start()
@@ -43,9 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         hotKeyManager?.registerDefaultShortcut()
 
-        if Self.wakeWordShouldStartEnabled() {
-            enableWakeWordListening()
-        }
+        wakeWordEnabled = UserDefaults.standard.bool(forKey: WakeWordPreferences.enabledKey)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -98,8 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSpeechSettings() {
         let candidates = [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
             "x-apple.systempreferences:com.apple.preference.speech",
             "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
         ]
         for candidate in candidates {
             guard let url = URL(string: candidate) else { continue }
@@ -177,19 +181,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wakeWordController?.stop()
         wakeWordEnabled = false
         UserDefaults.standard.set(false, forKey: WakeWordPreferences.enabledKey)
-    }
-
-    private static func wakeWordRequestedFromEnvironment() -> Bool {
-        guard let value = ProcessInfo.processInfo.environment["CLEO_ENABLE_WAKE_WORD"] else {
-            return false
-        }
-        return ["1", "true", "yes", "on"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-    }
-
-    private static func wakeWordShouldStartEnabled() -> Bool {
-        if wakeWordRequestedFromEnvironment() {
-            return true
-        }
-        return UserDefaults.standard.bool(forKey: WakeWordPreferences.enabledKey)
     }
 }

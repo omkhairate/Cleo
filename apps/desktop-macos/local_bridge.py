@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 
 def _bootstrap_paths() -> None:
+    if app_packages := os.environ.get("CLEO_APP_PACKAGES"):
+        sys.path.insert(0, app_packages)
+        return
+
     root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(root / "packages" / "assistant-core" / "src"))
     sys.path.insert(0, str(root / "apps" / "api" / "src"))

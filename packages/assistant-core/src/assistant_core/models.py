@@ -130,7 +130,7 @@ class CommandReply(BaseModel):
 
 
 class VisualContextPayload(BaseModel):
-    source: str = "pointer-capture"
+    source: str = "window-context"
     summary: str | None = None
     selected_text: str | None = None
     ocr_text: str | None = None

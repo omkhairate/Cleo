@@ -59,7 +59,7 @@ final class OverlayViewModel: ObservableObject {
     @Published var workspacePanelWidth: CGFloat = 360
     @Published var isListening = false
     @Published var wakeWordEnabled = UserDefaults.standard.bool(forKey: SpeechSetupPreferences.wakeWordEnabledKey)
-    @Published var speechSetupDismissed = UserDefaults.standard.bool(forKey: SpeechSetupPreferences.onboardingDismissedKey)
+    @Published var speechSetupDismissed = OverlayViewModel.isSpeechSetupDismissed()
     @Published var summonStyle: OverlaySummonStyle = .centered {
         didSet {
             onLayoutChange?()
@@ -76,6 +76,8 @@ final class OverlayViewModel: ObservableObject {
     private let api = CleoAPIClient()
     private let voiceInput = VoiceInputController()
     private var progressTask: Task<Void, Never>?
+    private var submissionTask: Task<Void, Never>?
+    private var activeRequestID = UUID()
     var onLayoutChange: (() -> Void)?
 
     var preferredHeight: CGFloat {
@@ -106,26 +108,28 @@ final class OverlayViewModel: ObservableObject {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
+        cancelCurrentInteraction(resetState: false)
+        let requestID = UUID()
+        activeRequestID = requestID
         presentationState = .expanded
         isLoading = true
         response = "Thinking..."
         footer = nil
+        commandTasks = []
         startProgress(for: trimmed)
 
-        Task {
-            defer {
-                isLoading = false
-                stopProgress()
-            }
+        submissionTask = Task { [weak self] in
+            guard let self else { return }
+            var receivedFinal = false
             do {
-                commandTasks = []
-                try await api.sendAutoStreaming(
+                try await self.api.sendAutoStreaming(
                     message: trimmed,
-                    visualContext: visualContext,
-                    responseMode: responseMode
+                    visualContext: self.visualContext,
+                    responseMode: self.responseMode
                 ) { [weak self] event in
                     guard let self else { return }
                     await MainActor.run {
+                        guard self.activeRequestID == requestID else { return }
                         if let mode = event.mode {
                             self.lastInteractionMode = mode
                         }
@@ -141,46 +145,60 @@ final class OverlayViewModel: ObservableObject {
                                 }
                             }
                         case "final":
+                            receivedFinal = true
                             self.response = event.response ?? self.response
                             let footerParts = [event.mode?.uppercased(), event.summary, event.provider, event.model].compactMap { $0 }
                             self.footer = footerParts.isEmpty ? nil : footerParts.joined(separator: " • ")
                             if let tasks = event.tasks {
                                 self.commandTasks = tasks
                             }
-                            self.isLoading = false
-                            self.stopProgress()
+                            self.finishCurrentInteraction(for: requestID)
                         default:
                             break
                         }
                     }
                 }
-                if self.response == "Thinking..." {
-                    let fallback = try await api.sendAuto(
+                guard !Task.isCancelled else { return }
+                if !receivedFinal {
+                    let fallback = try await self.api.sendAuto(
                         message: trimmed,
-                        visualContext: visualContext,
-                        responseMode: responseMode
+                        visualContext: self.visualContext,
+                        responseMode: self.responseMode
                     )
-                    lastInteractionMode = fallback.mode
-                    commandTasks = fallback.tasks
-                    response = fallback.text
-                    footer = fallback.footer
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run {
+                        guard self.activeRequestID == requestID else { return }
+                        self.lastInteractionMode = fallback.mode
+                        self.commandTasks = fallback.tasks
+                        self.response = fallback.text
+                        self.footer = fallback.footer
+                        self.finishCurrentInteraction(for: requestID)
+                    }
+                }
+            } catch is CancellationError {
+                await MainActor.run {
+                    self.finishCurrentInteraction(for: requestID, preserveResponse: true)
                 }
             } catch {
-                response = "Cleo could not reach the API.\n\n\(error.localizedDescription)"
-                footer = "Check CLEO_API_URL and make sure the backend is running."
+                await MainActor.run {
+                    guard self.activeRequestID == requestID else { return }
+                    self.response = "Cleo could not reach the API.\n\n\(error.localizedDescription)"
+                    self.footer = "Check CLEO_API_URL and make sure the backend is running."
+                    self.finishCurrentInteraction(for: requestID, preserveResponse: true)
+                }
             }
         }
     }
 
     func clear() {
         voiceInput.stop(sendFinalTranscript: false)
+        cancelCurrentInteraction(resetState: true)
         query = ""
         response = defaultResponse
         footer = nil
         visualContext = nil
         importStatus = nil
         commandTasks = []
-        stopProgress()
         presentationState = .compact
     }
 
@@ -202,6 +220,7 @@ final class OverlayViewModel: ObservableObject {
 
     func collapse() {
         voiceInput.stop(sendFinalTranscript: false)
+        cancelCurrentInteraction(resetState: false)
         presentationState = .compact
         isShowingMemoryPanel = false
     }
@@ -219,6 +238,7 @@ final class OverlayViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if case let .failure(error) = result {
+                    self.presentSpeechSetupHelp()
                     self.footer = error.localizedDescription
                     self.refreshSpeechSetupState()
                 }
@@ -234,6 +254,7 @@ final class OverlayViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if case let .failure(error) = result {
+                    self.presentSpeechSetupHelp()
                     self.footer = error.localizedDescription
                     self.refreshSpeechSetupState()
                 }
@@ -243,13 +264,15 @@ final class OverlayViewModel: ObservableObject {
 
     func openSpeechSettings() {
         let candidates = [
+            "x-apple.systempreferences:com.apple.Keyboard-Settings.extension",
             "x-apple.systempreferences:com.apple.preference.speech",
             "x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
         ]
         for candidate in candidates {
             guard let url = URL(string: candidate) else { continue }
             if NSWorkspace.shared.open(url) {
-                footer = "Opened speech settings."
+                footer = "Opened speech settings. If macOS offers a speech download, complete it there, then reopen Cleo."
                 return
             }
         }
@@ -257,7 +280,7 @@ final class OverlayViewModel: ObservableObject {
             at: URL(fileURLWithPath: "/System/Applications/System Settings.app"),
             configuration: NSWorkspace.OpenConfiguration()
         )
-        footer = "Opened System Settings."
+        footer = "Opened System Settings. Enable Dictation, Speech Recognition, and Microphone access for Cleo."
     }
 
     func dismissSpeechSetupCard() {
@@ -267,14 +290,37 @@ final class OverlayViewModel: ObservableObject {
 
     func refreshSpeechSetupState() {
         wakeWordEnabled = UserDefaults.standard.bool(forKey: SpeechSetupPreferences.wakeWordEnabledKey)
-        speechSetupDismissed = UserDefaults.standard.bool(forKey: SpeechSetupPreferences.onboardingDismissedKey)
+        speechSetupDismissed = OverlayViewModel.isSpeechSetupDismissed()
         if wakeWordEnabled {
             speechSetupDismissed = false
             UserDefaults.standard.set(false, forKey: SpeechSetupPreferences.onboardingDismissedKey)
         }
     }
 
+    func presentSpeechSetupHelp() {
+        speechSetupDismissed = false
+        UserDefaults.standard.set(false, forKey: SpeechSetupPreferences.onboardingDismissedKey)
+    }
+
     func setVisualContext(_ context: OverlayVisualContext?) {
+        guard let context else {
+            visualContext = nil
+            return
+        }
+
+        if let selectedText = context.selected_text?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !selectedText.isEmpty {
+            visualContext = OverlayVisualContext(
+                source: context.source,
+                summary: context.summary,
+                selected_text: selectedText,
+                ocr_text: nil,
+                image_path: nil,
+                region_description: context.region_description
+            )
+            return
+        }
+
         visualContext = context
     }
 
@@ -388,6 +434,26 @@ final class OverlayViewModel: ObservableObject {
         progressSteps = []
     }
 
+    private func cancelCurrentInteraction(resetState: Bool) {
+        activeRequestID = UUID()
+        submissionTask?.cancel()
+        submissionTask = nil
+        if resetState {
+            isLoading = false
+            stopProgress()
+        }
+    }
+
+    private func finishCurrentInteraction(for requestID: UUID, preserveResponse: Bool = false) {
+        guard activeRequestID == requestID else { return }
+        submissionTask = nil
+        isLoading = false
+        stopProgress()
+        if !preserveResponse, response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            response = defaultResponse
+        }
+    }
+
     private func configureVoiceInput() {
         voiceInput.onStateChange = { [weak self] listening in
             Task { @MainActor in
@@ -416,9 +482,18 @@ final class OverlayViewModel: ObservableObject {
         voiceInput.onError = { [weak self] message in
             Task { @MainActor in
                 self?.isListening = false
+                self?.presentSpeechSetupHelp()
                 self?.footer = message
                 self?.refreshSpeechSetupState()
             }
         }
+    }
+
+    private static func isSpeechSetupDismissed() -> Bool {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: SpeechSetupPreferences.onboardingDismissedKey) == nil {
+            return true
+        }
+        return defaults.bool(forKey: SpeechSetupPreferences.onboardingDismissedKey)
     }
 }

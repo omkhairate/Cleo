@@ -10,10 +10,11 @@ final class PointerTracker {
     private var lastSelectionSnapshot: String?
     private var lastSelectionCapturedAt: Date?
     private var lastSelectionRefreshAt: Date = .distantPast
+    private var lastSelectionIntentAt: Date?
 
     private(set) var pointerLocation: NSPoint = NSEvent.mouseLocation
     var onPointerMoved: ((NSPoint) -> Void)?
-    var onSecondaryDoubleClick: ((NSPoint, String?) -> Void)?
+    var onSecondaryDoubleClick: ((NSPoint, String?, Bool) -> Void)?
     var selectionProvider: (() -> String?)?
     var aggressiveSelectionProvider: (() -> String?)?
 
@@ -45,18 +46,26 @@ final class PointerTracker {
         }
 
         globalSelectionMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseUp, .keyUp]
+            matching: [.leftMouseUp]
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.refreshSelectionSnapshotIfNeeded(force: true, allowAggressive: false)
+                self?.refreshSelectionSnapshotIfNeeded(
+                    force: true,
+                    allowAggressive: false,
+                    markSelectionIntent: true
+                )
             }
         }
 
         localSelectionMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseUp, .keyUp]
+            matching: [.leftMouseUp]
         ) { [weak self] event in
             Task { @MainActor in
-                self?.refreshSelectionSnapshotIfNeeded(force: true, allowAggressive: false)
+                self?.refreshSelectionSnapshotIfNeeded(
+                    force: true,
+                    allowAggressive: false,
+                    markSelectionIntent: true
+                )
             }
             return event
         }
@@ -91,15 +100,26 @@ final class PointerTracker {
         let location = NSEvent.mouseLocation
         pointerLocation = location
         let allowAggressive = event.clickCount >= 2
-        refreshSelectionSnapshotIfNeeded(force: true, allowAggressive: allowAggressive)
+        refreshSelectionSnapshotIfNeeded(
+            force: true,
+            allowAggressive: allowAggressive,
+            markSelectionIntent: false
+        )
         onPointerMoved?(location)
 
         guard event.clickCount >= 2 else { return }
-        onSecondaryDoubleClick?(location, recentSelectionSnapshot(maxAge: 1.5))
+        onSecondaryDoubleClick?(location, recentSelectionSnapshot(maxAge: 8.0), hadRecentSelectionIntent(maxAge: 8.0))
     }
 
-    private func refreshSelectionSnapshotIfNeeded(force: Bool, allowAggressive: Bool = false) {
+    private func refreshSelectionSnapshotIfNeeded(
+        force: Bool,
+        allowAggressive: Bool = false,
+        markSelectionIntent: Bool = false
+    ) {
         let now = Date()
+        if markSelectionIntent {
+            lastSelectionIntentAt = now
+        }
         if !force, now.timeIntervalSince(lastSelectionRefreshAt) < 0.15 {
             return
         }
@@ -120,7 +140,7 @@ final class PointerTracker {
         }
 
         if let lastSelectionCapturedAt,
-           now.timeIntervalSince(lastSelectionCapturedAt) > 2.0 {
+           now.timeIntervalSince(lastSelectionCapturedAt) > 8.0 {
             lastSelectionSnapshot = nil
             self.lastSelectionCapturedAt = nil
         }
@@ -137,5 +157,12 @@ final class PointerTracker {
         }
 
         return lastSelectionSnapshot
+    }
+
+    private func hadRecentSelectionIntent(maxAge: TimeInterval) -> Bool {
+        guard let lastSelectionIntentAt else {
+            return false
+        }
+        return Date().timeIntervalSince(lastSelectionIntentAt) <= maxAge
     }
 }
