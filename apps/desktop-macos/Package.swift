@@ -17,5 +17,6 @@ let package = Package(
             name: "CleoOverlay",
             path: "Sources/CleoOverlay"
         ),
+        .testTarget(name: "CleoOverlayTests", dependencies: ["CleoOverlay"], path: "Tests"),
     ]
 )

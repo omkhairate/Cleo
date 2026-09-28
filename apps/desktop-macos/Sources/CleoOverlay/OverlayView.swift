@@ -4,6 +4,9 @@ struct OverlayView: View {
     @ObservedObject var viewModel: OverlayViewModel
     @FocusState private var composerFocused: Bool
     @State private var pointerCueVisible = false
+    @State private var showsRouteDetails = false
+    @State private var showsPulse = false
+    @ObservedObject private var proactive = ProactiveController.shared
 
     private var isExpanded: Bool {
         viewModel.presentationState == .expanded
@@ -18,7 +21,15 @@ struct OverlayView: View {
     }
 
     private var showsPointerAnchorCue: Bool {
+        viewModel.summonStyle == .pointerPinned && !isExpanded && !usesFloatingPointerPrompt
+    }
+
+    private var usesFloatingPointerPrompt: Bool {
         viewModel.summonStyle == .pointerPinned && !isExpanded
+    }
+
+    private var usesCenteredCompactPrompt: Bool {
+        viewModel.summonStyle == .centered && !isExpanded
     }
 
     private var shellTopInset: CGFloat {
@@ -37,62 +48,81 @@ struct OverlayView: View {
                 pointerAnchorCue
             }
 
-            GlassBackgroundView()
-                .clipShape(RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.14),
-                                    Color(red: 0.13, green: 0.17, blue: 0.24).opacity(0.18),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+            if usesFloatingPointerPrompt {
+                floatingPointerPrompt
+            } else {
+                GlassBackgroundView()
+                    .clipShape(RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.black.opacity(0.24),
+                                        Color.black.opacity(0.36),
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: outerCornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+                    .padding(.top, shellTopInset)
+                    .padding(.bottom, shellBottomInset)
+
+                VStack(alignment: .leading, spacing: 14) {
+                    composerBar(
+                        textSize: 21,
+                        iconSize: 15,
+                        horizontalPadding: 20,
+                        verticalPadding: 14,
+                        showReturnHint: !isExpanded
+                    )
+
+                    if usesCenteredCompactPrompt, let detail = centeredCompactDetailText {
+                        centeredCompactDetailRow(detail)
+                    } else if !isExpanded, let selectedText = viewModel.visualContext?.selected_text,
+                              !selectedText.isEmpty {
+                        selectedTextChip(selectedText)
+                    } else if !isExpanded, let footer = viewModel.footer, !footer.isEmpty {
+                        compactStatusChip(footer)
+                    }
+
+                    if isExpanded {
+                        expandedContent
+                    } else {
+                        Spacer(minLength: 0)
+                    }
+                }
+                .padding(isExpanded ? 20 : 16)
                 .padding(.top, shellTopInset)
                 .padding(.bottom, shellBottomInset)
-
-            VStack(alignment: .leading, spacing: 14) {
-                composerBar(
-                    textSize: 21,
-                    iconSize: 15,
-                    horizontalPadding: 20,
-                    verticalPadding: 14,
-                    showReturnHint: !isExpanded
-                )
-
-                if let selectedText = viewModel.visualContext?.selected_text,
-                   !selectedText.isEmpty {
-                    selectedTextChip(selectedText)
-                } else if !isExpanded, let footer = viewModel.footer, !footer.isEmpty {
-                    compactStatusChip(footer)
-                }
-
-                if isExpanded {
-                    expandedContent
-                } else {
-                    Spacer(minLength: 0)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .padding(isExpanded ? 20 : 16)
-            .padding(.top, shellTopInset)
-            .padding(.bottom, shellBottomInset)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .padding(8)
         .frame(maxWidth: .infinity)
         .frame(height: viewModel.preferredHeight)
         .compositingGroup()
+        .environment(\.openURL, OpenURLAction { url in
+            if url.isFileURL {
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+                return .handled
+            }
+            return ["https", "http"].contains(url.scheme ?? "") ? .systemAction : .discarded
+        })
         .onAppear {
             composerFocused = true
             updatePointerCueVisibility(animated: false)
+        }
+        .onChange(of: viewModel.composerFocusRequest) {
+            composerFocused = false
+            DispatchQueue.main.async {
+                composerFocused = true
+            }
         }
         .onChange(of: showsPointerAnchorCue) {
             updatePointerCueVisibility(animated: true)
@@ -110,124 +140,171 @@ struct OverlayView: View {
 
     private var expandedContent: some View {
         HStack(alignment: .top, spacing: 18) {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Cleo")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.92))
-                            Text(subtitleText)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(Color.white.opacity(0.5))
-                        }
-
-                        Spacer()
-
-                        smallModeBadge
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Label(routeBadgeLabel, systemImage: routeBadgeIconName)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.7))
+                    if let selection = viewModel.visualContext?.selected_text, !selection.isEmpty {
+                        Text(selection)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
+                    Spacer(minLength: 8)
+                    if viewModel.visualContext != nil {
+                        Button(action: viewModel.detachVisualContext) {
+                            Image(systemName: "xmark.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .disabled(viewModel.isLoading)
+                        .help("Detach screen or selection context; keep this conversation")
+                        .accessibilityLabel("Detach context")
+                    }
+                    Button { showsRouteDetails.toggle() } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .help("Routing and runtime details")
+                    .popover(isPresented: $showsRouteDetails) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            routeInspector(reason: viewModel.routeReasonText ?? "Waiting for a request.", candidates: viewModel.routeCandidateSummary)
+                            if let footer = viewModel.runtimeDetails ?? viewModel.footer {
+                                Text(footer).font(.caption).textSelection(.enabled)
+                            }
+                        }
+                        .padding(16)
+                        .frame(width: 340)
+                        .preferredColorScheme(.dark)
+                    }
+                }
+                .padding(.horizontal, 8)
 
-                    HStack(alignment: .center, spacing: 14) {
-                        Picker("Response Mode", selection: $viewModel.responseMode) {
+                ScrollViewReader { scroll in
+                  ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                            ForEach(viewModel.conversationTurns) { turn in
+                                conversationPrompt(turn.prompt)
+                                Text(replyText(turn.reply))
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Divider().overlay(.white.opacity(0.08))
+                            }
+                            if !viewModel.submittedPrompt.isEmpty {
+                                conversationPrompt(viewModel.submittedPrompt)
+                            }
+                            if let importStatus = viewModel.importStatus, !importStatus.isEmpty {
+                                Text(importStatus).font(.caption).foregroundStyle(.white.opacity(0.65))
+                            }
+                            if !viewModel.commandTasks.isEmpty {
+                                commandTaskStrip
+                                commandOutcomeStrip
+                            }
+
+                            if viewModel.response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && viewModel.isLoading {
+                                thinkingState
+                            } else {
+                                Text(replyText(viewModel.response))
+                                    .font(.system(size: 16, weight: .regular))
+                                    .foregroundStyle(Color.white.opacity(0.95))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .lineSpacing(5)
+                                    .textSelection(.enabled)
+                            }
+                            Color.clear.frame(height: 1).id("conversation-bottom")
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                  }
+        .onAppear {
+                      scroll.scrollTo("conversation-bottom", anchor: .bottom)
+                  }
+                  .onChange(of: viewModel.submittedPrompt) {
+                      scroll.scrollTo("conversation-bottom", anchor: .bottom)
+                  }
+                  .onChange(of: viewModel.response) {
+                      if viewModel.isLoading {
+                          scroll.scrollTo("conversation-bottom", anchor: .bottom)
+                      }
+                  }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 20))
+                .layoutPriority(1)
+
+                HStack(spacing: 16) {
+                    if viewModel.isLoading, let activeStep = viewModel.activeProgressStep {
+                        ProgressView().controlSize(.small)
+                        Text(activeStep)
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                    } else {
+                        Text("Cleo").font(.system(size: 11, weight: .semibold))
+                    }
+                    Spacer(minLength: 8)
+                    Button { showsPulse.toggle() } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "waveform.path")
+                            Text(proactive.snapshot?.suggestions.isEmpty == false ? "Suggestion" : "Pulse")
+                        }
+                        .foregroundStyle(proactive.snapshot?.enabled == true ? Color.mint : Color.secondary)
+                    }
+                    .help("Goals, research mode and proactive activity")
+                    .popover(isPresented: $showsPulse) {
+                        ProactivePanel(controller: proactive) { prompt in
+                            showsPulse = false
+                            viewModel.detachVisualContext()
+                            viewModel.query = prompt
+                            viewModel.focusComposer()
+                        }
+                    }
+                    Button(action: viewModel.copyResponse) {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    .disabled(viewModel.response.isEmpty)
+                    .help("Copy latest response")
+                    .accessibilityLabel("Copy latest response")
+                    Menu {
+                        Button("Edit Last Request", action: viewModel.editLastRequest)
+                            .disabled(viewModel.isLoading || viewModel.submittedPrompt.isEmpty)
+                        Divider()
+                        Button("Memory", action: viewModel.showMemoryPanel)
+                        Button("Graph", action: viewModel.showGraphPanel)
+                        Button("Import ChatGPT Export", action: viewModel.importChatGPTExport)
+                        Divider()
+                        Picker("Response Quality", selection: $viewModel.responseMode) {
                             ForEach(OverlayResponseMode.allCases) { mode in
                                 Text(mode.title).tag(mode)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 220)
-
-                        subtleLabel(contextStatusLabel)
-
-                        Spacer()
-
-                        actionChip("Memory") {
-                            viewModel.showMemoryPanel()
+                        if viewModel.shouldShowSpeechSetupCard {
+                            Divider()
+                            Button("Finish Voice Setup", action: viewModel.openSpeechSettings)
                         }
-
-                        actionChip("Graph") {
-                            viewModel.showGraphPanel()
-                        }
-
-                        actionChip("Import") {
-                            viewModel.importChatGPTExport()
-                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
-                }
-                .padding(18)
-                .panelSurface(cornerRadius: 26, fillOpacity: 0.05, strokeOpacity: 0.085)
-
-                if let importStatus = viewModel.importStatus, !importStatus.isEmpty {
-                    compactStatusChip(importStatus)
-                }
-
-                if viewModel.shouldShowSpeechSetupCard {
-                    speechSetupCard
-                }
-
-                if viewModel.isLoading, let activeStep = viewModel.activeProgressStep {
-                    progressStrip(activeStep: activeStep, steps: viewModel.progressSteps)
-                }
-
-                HStack(spacing: 12) {
-                    Text("Command + Shift + Space")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(Color.white.opacity(0.45))
-                    Spacer()
-                    if let footer = viewModel.footer {
-                        Text(footer)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.5))
-                            .lineLimit(1)
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .help("Memory, imports and response quality")
+                    Button("Clear", action: viewModel.clear)
+                    Button { viewModel.collapse() } label: {
+                        Image(systemName: "chevron.up")
                     }
-                    actionChip("Collapse") {
-                        viewModel.collapse()
-                    }
-
-                    actionChip("Clear") {
-                        viewModel.clear()
-                    }
+                    .help("Collapse")
                 }
-
-                VStack(alignment: .leading, spacing: 14) {
-                    HStack(spacing: 10) {
-                        Text(viewModel.lastInteractionMode == "command" ? "Command Session" : "Response")
-                            .font(.system(size: 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Color.white.opacity(0.78))
-                        subtleLabel(viewModel.lastInteractionMode == "command" ? "Specialist workflow" : "Conversation")
-                        Spacer()
-                    }
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 14) {
-                            if !viewModel.commandTasks.isEmpty {
-                                commandTaskStrip
-                                commandOutcomeStrip
-                            } else if viewModel.isLoading, !viewModel.progressSteps.isEmpty {
-                                pendingWorkflowStrip
-                            }
-
-                            if viewModel.response == "Thinking..." && viewModel.isLoading {
-                                thinkingState
-                            } else {
-                                Text(viewModel.response)
-                                    .font(.system(size: 15, weight: .regular, design: .rounded))
-                                    .foregroundStyle(Color.white.opacity(0.92))
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .lineSpacing(3)
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .frame(maxHeight: .infinity)
-                    .padding(18)
-                    .background(
-                        RoundedRectangle(cornerRadius: 24, style: .continuous)
-                            .fill(Color.black.opacity(0.08))
-                    )
-                }
-                .padding(18)
-                .panelSurface(cornerRadius: 28, fillOpacity: 0.05, strokeOpacity: 0.07)
+                .font(.system(size: 12, weight: .medium))
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.65))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if viewModel.isShowingMemoryPanel {
                 HStack(spacing: 0) {
@@ -241,11 +318,188 @@ struct OverlayView: View {
         .transition(.move(edge: .top).combined(with: .opacity))
     }
 
+    private func replyText(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(text)
+    }
+
+    private func conversationPrompt(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white.opacity(0.92))
+            .textSelection(.enabled)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
     private var subtitleText: String {
         if viewModel.lastInteractionMode == "command" {
             return "Command workflow with specialist actions and shared memory"
         }
         return "One assistant, shared memory, local-first workflows"
+    }
+
+    private var floatingPointerPrompt: some View {
+        floatingPromptShell
+    }
+
+    private var floatingPromptShell: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                routeBadge
+
+                TextField("Ask Cleo about this...", text: $viewModel.query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.94))
+                    .focused($composerFocused)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        viewModel.submit()
+                    }
+
+                pointerTrailingAction
+            }
+
+            if let selectedText = viewModel.visualContext?.selected_text,
+               !selectedText.isEmpty {
+                Text(selectedText)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.78))
+                    .lineLimit(1)
+            } else if let footer = viewModel.footer, !footer.isEmpty {
+                Text(footer)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.6))
+                    .lineLimit(1)
+            } else {
+                Text(pointerPromptSupportingText)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.48))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(.horizontal, 13)
+        .padding(.top, viewModel.anchorEdge == .top ? 25 : 11)
+        .padding(.bottom, viewModel.anchorEdge == .bottom ? 24 : 10)
+        .background(
+            PointerPromptBubble(edge: viewModel.anchorEdge, tailFraction: viewModel.anchorXFraction)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.17, green: 0.18, blue: 0.2).opacity(0.96),
+                            Color(red: 0.17, green: 0.18, blue: 0.2).opacity(0.94),
+                            Color(red: 0.13, green: 0.14, blue: 0.16).opacity(0.96),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+        )
+        .overlay(
+            PointerPromptBubble(edge: viewModel.anchorEdge, tailFraction: viewModel.anchorXFraction)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        )
+        .background(
+            PointerPromptBubble(edge: viewModel.anchorEdge, tailFraction: viewModel.anchorXFraction)
+                .fill(Color.black.opacity(0.12))
+                .blur(radius: 10)
+        )
+    }
+
+    private var routeBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: routeBadgeIconName)
+                .font(.system(size: 10, weight: .semibold))
+            Text(routeBadgeLabel)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(Color.white.opacity(0.78))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.07))
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private var pointerTrailingAction: some View {
+        Group {
+            if viewModel.isLoading {
+                Button(action: {
+                    viewModel.stopCurrentRequest()
+                }) {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11, weight: .black))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.09))
+                        )
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: {
+                    viewModel.submit()
+                }) {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .frame(width: 24, height: 24)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.06))
+                        )
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var pointerPromptSupportingText: String {
+        if let routeReasonText = viewModel.routeReasonText {
+            return routeReasonText
+        }
+
+        switch routeBadgeLabel {
+        case "Selection":
+            return "Focused on what you selected"
+        case "Glance":
+            return "Focused on the nearby pointer region"
+        case "Full":
+            return "Looking at the full app window"
+        case "Command":
+            return "Routing this into actions and specialists"
+        case "Visual":
+            return "Using the visual stack for what you are seeing"
+        case "Chat":
+            return "Quick text conversation"
+        default:
+            return "Quick prompt at your pointer"
+        }
+    }
+
+    private var centeredCompactDetailText: String? {
+        if let selectedText = viewModel.visualContext?.selected_text,
+           !selectedText.isEmpty {
+            return "Selected: \(selectedText)"
+        }
+        if let footer = viewModel.footer,
+           !footer.isEmpty {
+            return footer
+        }
+        return nil
     }
 
     private func composerBar(
@@ -277,10 +531,12 @@ struct OverlayView: View {
             }
             .frame(width: 30, height: 30)
 
-            TextField("Ask or command Cleo...", text: $viewModel.query)
+                TextField("Ask or command Cleo...", text: $viewModel.query)
                 .textFieldStyle(.plain)
                 .font(.system(size: textSize, weight: .medium, design: .rounded))
                 .foregroundStyle(.white)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(0)
                 .focused($composerFocused)
                 .submitLabel(.go)
                 .onTapGesture {
@@ -291,11 +547,60 @@ struct OverlayView: View {
                 }
 
             if viewModel.isLoading {
-                ProgressView()
-                    .tint(.white)
+                Button(action: {
+                    viewModel.stopCurrentRequest()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Stop")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(Color.white.opacity(0.88))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.11))
+                    )
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
             } else {
-                if viewModel.visualContext != nil {
-                    iconStatusChip(systemName: "viewfinder.circle.fill", title: "Context")
+                if !isExpanded {
+                    Button { showsPulse.toggle() } label: {
+                        Image(systemName: proactive.snapshot?.suggestions.isEmpty == false ? "bell.badge" : "waveform.path")
+                            .foregroundStyle(proactive.snapshot?.enabled == true ? Color.mint : Color.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cleo Pulse")
+                    .help("Goals and proactive routines")
+                    .popover(isPresented: $showsPulse) {
+                        ProactivePanel(controller: proactive) { prompt in
+                            showsPulse = false
+                            viewModel.detachVisualContext()
+                            viewModel.query = prompt
+                            viewModel.expand()
+                            viewModel.focusComposer()
+                        }
+                    }
+                }
+                if !isExpanded && viewModel.hasConversation {
+                    Button(action: viewModel.expand) {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show conversation history")
+                    .accessibilityLabel("Show conversation history")
+                }
+                if !isExpanded {
+                    iconStatusChip(systemName: routeBadgeIconName, title: routeBadgeLabel)
+                        .fixedSize()
+                        .layoutPriority(1)
                 }
 
                 Button(action: {
@@ -467,13 +772,71 @@ struct OverlayView: View {
 
     private var contextStatusLabel: String {
         guard let context = viewModel.visualContext else {
-            return "No live context"
+            return "Chat"
         }
         if let selectedText = context.selected_text,
            !selectedText.isEmpty {
-            return "Selected text attached"
+            return "Selection"
         }
-        return "Visual context attached"
+        switch context.source {
+        case "pointer-focus":
+            return "Glance"
+        case "window-context":
+            return "Full Context"
+        default:
+            return "Visual"
+        }
+    }
+
+    private var contextStatusIconName: String {
+        guard let context = viewModel.visualContext else {
+            return "text.bubble.fill"
+        }
+        if let selectedText = context.selected_text,
+           !selectedText.isEmpty {
+            return "text.cursor"
+        }
+        switch context.source {
+        case "pointer-focus":
+            return "scope"
+        case "window-context":
+            return "macwindow"
+        default:
+            return "viewfinder.circle.fill"
+        }
+    }
+
+    private var routeBadgeLabel: String {
+        if let classification = viewModel.routeClassification {
+            if classification.mode == "command" {
+                return "Command"
+            }
+            if classification.stack == "visual" {
+                return "Visual"
+            }
+        }
+        switch contextStatusLabel {
+        case "Selection":
+            return "Selection"
+        case "Glance":
+            return "Glance"
+        case "Full Context":
+            return "Full"
+        default:
+            return "Chat"
+        }
+    }
+
+    private var routeBadgeIconName: String {
+        if let classification = viewModel.routeClassification {
+            if classification.mode == "command" {
+                return "point.3.connected.trianglepath.dotted"
+            }
+            if classification.stack == "visual" {
+                return "eye"
+            }
+        }
+        return contextStatusIconName
     }
 
     private func compactStatusChip(_ text: String) -> some View {
@@ -492,6 +855,64 @@ struct OverlayView: View {
                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func centeredCompactDetailRow(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.28))
+                .frame(width: 6, height: 6)
+
+            Text(text)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.7))
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        )
+    }
+
+    private func routeInspector(reason: String, candidates: String?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                subtleLabel("Route")
+                Text(viewModel.routeDisplayLabel)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.82))
+            }
+
+            Text(reason)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.58))
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let candidates, !candidates.isEmpty {
+                Text(candidates)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.white.opacity(0.46))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.white.opacity(0.045))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        )
     }
 
     private var smallModeBadge: some View {
@@ -827,6 +1248,28 @@ private struct WorkspacePanelView: View {
                     ZStack {
                         if viewModel.memoryPanelTab == .memory {
                             VStack(alignment: .leading, spacing: 16) {
+                                memoryCard(title: "Session") {
+                                    if snapshot.session.active_goal == nil,
+                                       snapshot.session.active_app == nil,
+                                       snapshot.session.active_tasks.isEmpty,
+                                       snapshot.session.active_files.isEmpty {
+                                        memoryPlaceholder("No active session state yet.")
+                                    } else {
+                                        if let goal = snapshot.session.active_goal, !goal.isEmpty {
+                                            memoryRow("Current Goal", goal)
+                                        }
+                                        if let app = snapshot.session.active_app, !app.isEmpty {
+                                            memoryRow("Active App", app)
+                                        }
+                                        if !snapshot.session.active_tasks.isEmpty {
+                                            memoryRow("Active Tasks", snapshot.session.active_tasks.prefix(4).joined(separator: " • "))
+                                        }
+                                        if !snapshot.session.active_files.isEmpty {
+                                            memoryRow("Active Files", snapshot.session.active_files.prefix(3).map { ($0 as NSString).lastPathComponent }.joined(separator: " • "))
+                                        }
+                                    }
+                                }
+
                                 memoryCard(title: "Preferences") {
                                     if snapshot.profile.preferences.isEmpty {
                                         memoryPlaceholder("No preferences yet.")
@@ -843,6 +1286,72 @@ private struct WorkspacePanelView: View {
                                     } else {
                                         ForEach(snapshot.profile.workflows, id: \.name) { workflow in
                                             memoryRow(workflow.name, workflow.pattern)
+                                        }
+                                    }
+                                }
+
+                                memoryCard(title: "App Adapters") {
+                                    if snapshot.adapters.isEmpty {
+                                        memoryPlaceholder("No app adapters available.")
+                                    } else {
+                                        ForEach(Array(snapshot.adapters.prefix(6).enumerated()), id: \.offset) { _, adapter in
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(adapter.app_name)
+                                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.9))
+                                                Text(adapter.actions.prefix(3).joined(separator: " • "))
+                                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.58))
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                }
+
+                                memoryCard(title: "Devices") {
+                                    if snapshot.devices.isEmpty {
+                                        memoryPlaceholder("No LAN devices registered yet.")
+                                    } else {
+                                        ForEach(Array(snapshot.devices.prefix(6).enumerated()), id: \.offset) { _, device in
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(device.name)
+                                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.9))
+                                                Text(deviceSummary(device))
+                                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                    .foregroundStyle(Color.white.opacity(0.58))
+                                            }
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                }
+
+                                memoryCard(title: "Routines") {
+                                    if snapshot.routines.isEmpty {
+                                        memoryPlaceholder("No routines configured yet.")
+                                    } else {
+                                        ForEach(Array(snapshot.routines.prefix(5).enumerated()), id: \.offset) { _, routine in
+                                            memoryRow(routine.name, routine.trigger)
+                                        }
+                                    }
+                                }
+
+                                memoryCard(title: "Timeline") {
+                                    if snapshot.timeline.isEmpty {
+                                        memoryPlaceholder("No recent timeline activity.")
+                                    } else {
+                                        ForEach(Array(snapshot.timeline.prefix(6).enumerated()), id: \.offset) { _, event in
+                                            memoryRow(event.title, event.app_name ?? event.recorded_at)
+                                        }
+                                    }
+                                }
+
+                                memoryCard(title: "Context Packs") {
+                                    if snapshot.contextPacks.isEmpty {
+                                        memoryPlaceholder("No context packs yet.")
+                                    } else {
+                                        ForEach(Array(snapshot.contextPacks.prefix(4).enumerated()), id: \.offset) { _, pack in
+                                            memoryRow(pack.title, "\(pack.source_type) • \(pack.file_count) files")
                                         }
                                     }
                                 }
@@ -917,6 +1426,18 @@ private struct WorkspacePanelView: View {
         Text(text)
             .font(.system(size: 13, weight: .medium, design: .rounded))
             .foregroundStyle(Color.white.opacity(0.5))
+    }
+
+    private func deviceSummary(_ device: OverlayLANDevice) -> String {
+        let parts: [String?] = [
+            device.device_type,
+            device.hostname,
+            device.protocols.isEmpty ? nil : device.protocols.prefix(3).joined(separator: " • "),
+        ]
+        return parts.compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            return value
+        }.joined(separator: " • ")
     }
 
     private func actionInlineChip(_ title: String, action: @escaping () -> Void) -> some View {
@@ -1189,6 +1710,40 @@ private struct GraphEdgeLine: Shape {
     }
 }
 
+private struct PointerPromptBubble: Shape {
+    let edge: OverlayAnchorEdge
+    let tailFraction: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let radius: CGFloat = 18
+        let top = rect.minY + (edge == .top ? 14 : 0)
+        let bottom = rect.maxY - (edge == .bottom ? 14 : 0)
+        let tail = min(max(rect.minX + rect.width * tailFraction, rect.minX + 26), rect.maxX - 26)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + radius, y: top))
+        if edge == .top {
+            path.addLine(to: CGPoint(x: tail - 8, y: top))
+            path.addQuadCurve(to: CGPoint(x: tail, y: rect.minY), control: CGPoint(x: tail - 3, y: top - 2))
+            path.addQuadCurve(to: CGPoint(x: tail + 8, y: top), control: CGPoint(x: tail + 3, y: top - 2))
+        }
+        path.addLine(to: CGPoint(x: rect.maxX - radius, y: top))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: top + radius), control: CGPoint(x: rect.maxX, y: top))
+        path.addLine(to: CGPoint(x: rect.maxX, y: bottom - radius))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - radius, y: bottom), control: CGPoint(x: rect.maxX, y: bottom))
+        if edge == .bottom {
+            path.addLine(to: CGPoint(x: tail + 8, y: bottom))
+            path.addQuadCurve(to: CGPoint(x: tail, y: rect.maxY), control: CGPoint(x: tail + 3, y: bottom + 2))
+            path.addQuadCurve(to: CGPoint(x: tail - 8, y: bottom), control: CGPoint(x: tail - 3, y: bottom + 2))
+        }
+        path.addLine(to: CGPoint(x: rect.minX + radius, y: bottom))
+        path.addQuadCurve(to: CGPoint(x: rect.minX, y: bottom - radius), control: CGPoint(x: rect.minX, y: bottom))
+        path.addLine(to: CGPoint(x: rect.minX, y: top + radius))
+        path.addQuadCurve(to: CGPoint(x: rect.minX + radius, y: top), control: CGPoint(x: rect.minX, y: top))
+        path.closeSubpath()
+        return path
+    }
+}
+
 private struct PointerTailShape: Shape {
     let edge: OverlayAnchorEdge
 
@@ -1223,6 +1778,7 @@ struct GlassBackgroundView: NSViewRepresentable {
         view.material = .hudWindow
         view.blendingMode = .behindWindow
         view.state = .active
+        view.appearance = NSAppearance(named: .darkAqua)
         return view
     }
 
@@ -1230,5 +1786,6 @@ struct GlassBackgroundView: NSViewRepresentable {
         nsView.material = .hudWindow
         nsView.blendingMode = .behindWindow
         nsView.state = .active
+        nsView.appearance = NSAppearance(named: .darkAqua)
     }
 }

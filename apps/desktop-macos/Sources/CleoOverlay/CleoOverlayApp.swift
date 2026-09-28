@@ -6,7 +6,9 @@ struct CleoOverlayApp: App {
 
     var body: some Scene {
         Settings {
-            EmptyView()
+            CleoSettingsView {
+                appDelegate.showAssistant()
+            }
         }
     }
 }

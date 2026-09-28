@@ -11,6 +11,8 @@ final class PointerTracker {
     private var lastSelectionCapturedAt: Date?
     private var lastSelectionRefreshAt: Date = .distantPast
     private var lastSelectionIntentAt: Date?
+    private var selectionAppPID: pid_t?
+    private var selectionDragStarted = false
 
     private(set) var pointerLocation: NSPoint = NSEvent.mouseLocation
     var onPointerMoved: ((NSPoint) -> Void)?
@@ -46,26 +48,18 @@ final class PointerTracker {
         }
 
         globalSelectionMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseUp]
-        ) { [weak self] _ in
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
             Task { @MainActor in
-                self?.refreshSelectionSnapshotIfNeeded(
-                    force: true,
-                    allowAggressive: false,
-                    markSelectionIntent: true
-                )
+                self?.handleSelectionEvent(event)
             }
         }
 
         localSelectionMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.leftMouseUp]
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
         ) { [weak self] event in
             Task { @MainActor in
-                self?.refreshSelectionSnapshotIfNeeded(
-                    force: true,
-                    allowAggressive: false,
-                    markSelectionIntent: true
-                )
+                self?.handleSelectionEvent(event)
             }
             return event
         }
@@ -99,7 +93,7 @@ final class PointerTracker {
     private func handleRightMouseEvent(_ event: NSEvent) {
         let location = NSEvent.mouseLocation
         pointerLocation = location
-        let allowAggressive = event.clickCount >= 2
+        let allowAggressive = event.clickCount >= 2 && hadRecentSelectionIntent(maxAge: 8.0)
         refreshSelectionSnapshotIfNeeded(
             force: true,
             allowAggressive: allowAggressive,
@@ -111,12 +105,38 @@ final class PointerTracker {
         onSecondaryDoubleClick?(location, recentSelectionSnapshot(maxAge: 8.0), hadRecentSelectionIntent(maxAge: 8.0))
     }
 
+    private func handleSelectionEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown:
+            selectionDragStarted = false
+        case .leftMouseDragged:
+            selectionDragStarted = true
+        case .leftMouseUp:
+            let selectionIntent = selectionDragStarted || event.clickCount >= 2
+            lastSelectionSnapshot = nil
+            lastSelectionCapturedAt = nil
+            lastSelectionIntentAt = nil
+            refreshSelectionSnapshotIfNeeded(force: true, markSelectionIntent: selectionIntent)
+            selectionDragStarted = false
+        default:
+            break
+        }
+    }
+
     private func refreshSelectionSnapshotIfNeeded(
         force: Bool,
         allowAggressive: Bool = false,
         markSelectionIntent: Bool = false
     ) {
         let now = Date()
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if selectionAppPID != frontmostPID {
+            lastSelectionSnapshot = nil
+            lastSelectionCapturedAt = nil
+            lastSelectionIntentAt = nil
+            selectionAppPID = frontmostPID
+        }
+        guard frontmostPID != ProcessInfo.processInfo.processIdentifier else { return }
         if markSelectionIntent {
             lastSelectionIntentAt = now
         }

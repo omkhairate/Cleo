@@ -3,6 +3,67 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PROJECT_ROOT="$(cd "$ROOT_DIR/../.." && pwd)"
+APP_SUPPORT_DIR="${CLEO_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Cleo}"
+RUNTIME_ROOT="${CLEO_RUNTIME_ROOT:-$APP_SUPPORT_DIR/runtime}"
+RUNTIME_MODE="${CLEO_RUNTIME_MODE:-managed}"
+
+# Keep executable dependencies outside Desktop/iCloud, where macOS can evict them.
+if [[ "$RUNTIME_MODE" == "managed" ]]; then
+  PYTHON_SOURCE="${CLEO_PYTHON_BIN:-$(command -v python3)}"
+  VENV_ROOT="$APP_SUPPORT_DIR/venv"
+  mkdir -p "$APP_SUPPORT_DIR" "$RUNTIME_ROOT"
+  MANAGED_LOCK="$APP_SUPPORT_DIR/install-runtime.lock"
+  if ! mkdir "$MANAGED_LOCK" 2>/dev/null; then
+    echo "Another runtime install is already running: $MANAGED_LOCK"
+    exit 1
+  fi
+  trap 'rmdir "$MANAGED_LOCK"' EXIT
+  if [[ ! -x "$VENV_ROOT/bin/python3" ]]; then
+    "$PYTHON_SOURCE" -m venv "$VENV_ROOT"
+  fi
+  echo "Installing local runtime dependencies outside Desktop..."
+  "$VENV_ROOT/bin/python3" -m pip install --timeout 60 \
+    'pydantic>=2.8,<3' 'pydantic-settings>=2.3,<3' 'httpx>=0.27,<1' \
+    'torch==2.4.1' 'torchvision==0.19.1' 'transformers==4.51.3' pillow 'pypdf>=4,<7'
+  mkdir -p "$RUNTIME_ROOT/app" "$RUNTIME_ROOT/bridge"
+  if [[ -L "$RUNTIME_ROOT/app/assistant_core" ]]; then
+    rm "$RUNTIME_ROOT/app/assistant_core"
+  fi
+  if [[ -L "$RUNTIME_ROOT/bridge/local_bridge.py" ]]; then
+    rm "$RUNTIME_ROOT/bridge/local_bridge.py"
+  fi
+  COPYFILE_DISABLE=1 rsync -a --delete --exclude '__pycache__' --exclude '*.pyc' \
+    "$PROJECT_ROOT/packages/assistant-core/src/assistant_core/" "$RUNTIME_ROOT/app/assistant_core/"
+  COPYFILE_DISABLE=1 cp -X "$ROOT_DIR/local_bridge.py" "$RUNTIME_ROOT/bridge/local_bridge.py"
+  if [[ -f "$PROJECT_ROOT/.env" ]] && ! ls -lO "$PROJECT_ROOT/.env" | grep -q dataless; then
+    COPYFILE_DISABLE=1 cp -X "$PROJECT_ROOT/.env" "$APP_SUPPORT_DIR/.env"
+    chmod 600 "$APP_SUPPORT_DIR/.env"
+  elif [[ -f "$PROJECT_ROOT/.env" && ! -f "$APP_SUPPORT_DIR/.env" ]]; then
+    echo "The project .env is an iCloud placeholder. Download it in Finder before installing."
+    exit 1
+  fi
+  cat > "$RUNTIME_ROOT/run_bridge.sh" <<'EOF'
+#!/bin/zsh
+set -euo pipefail
+RUNTIME_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_SUPPORT_DIR="$(dirname "$RUNTIME_DIR")"
+unset PYTHONHOME
+export PYTHONPATH="$RUNTIME_DIR/app"
+export CLEO_APP_PACKAGES="$RUNTIME_DIR/app"
+export CLEO_STATE_FILE_PATH="$APP_SUPPORT_DIR/state.json"
+export HF_HOME="$APP_SUPPORT_DIR/huggingface"
+export TOKENIZERS_PARALLELISM=false
+export PYDANTIC_DISABLE_PLUGINS=__all__
+cd "$APP_SUPPORT_DIR"
+exec "$APP_SUPPORT_DIR/venv/bin/python3" "$RUNTIME_DIR/bridge/local_bridge.py" "$@"
+EOF
+  chmod +x "$RUNTIME_ROOT/run_bridge.sh"
+  "$VENV_ROOT/bin/python3" -c 'import torch, torchvision, transformers, pydantic_settings, pypdf; print("Runtime dependencies verified.")'
+  CLEO_APP_PACKAGES="$RUNTIME_ROOT/app" "$VENV_ROOT/bin/python3" "$RUNTIME_ROOT/bridge/local_bridge.py" revision > "$RUNTIME_ROOT/.revision"
+  /bin/zsh "$ROOT_DIR/scripts/stop_runtime.sh"
+  echo "Cleo runtime installed at $RUNTIME_ROOT"
+  exit 0
+fi
 LOCK_DIR="$ROOT_DIR/.build/install_runtime.lock"
 
 PYTHON_BIN_SOURCE="${CLEO_BUNDLED_PYTHON_BIN:-/Users/apollo/miniforge3/bin/python3}"
@@ -11,7 +72,6 @@ SITE_PACKAGES_SOURCE="${CLEO_BUNDLED_SITE_PACKAGES:-$PROJECT_ROOT/.venv/lib/pyth
 APP_SUPPORT_DIR="${CLEO_APP_SUPPORT_DIR:-$HOME/Library/Application Support/Cleo}"
 RUNTIME_ROOT="${CLEO_RUNTIME_ROOT:-$APP_SUPPORT_DIR/runtime}"
 FORCE_REBUILD_RUNTIME="${CLEO_FORCE_REBUILD_RUNTIME:-0}"
-RUNTIME_MODE="${CLEO_RUNTIME_MODE:-link}"
 PROJECT_ENV_FILE="${CLEO_PROJECT_ENV_FILE:-$PROJECT_ROOT/.env}"
 
 RUNTIME_SITE_PACKAGES_ITEMS=(
@@ -51,6 +111,7 @@ RUNTIME_SITE_PACKAGES_ITEMS=(
   torchvision
   tqdm
   transformers
+  pypdf
   typing_extensions.py
   typing_inspection
   urllib3
@@ -77,6 +138,7 @@ RUNTIME_SITE_PACKAGES_GLOBS=(
   "numpy-*.dist-info"
   "packaging-*.dist-info"
   "pillow-*.dist-info"
+  "pypdf-*.dist-info"
   "pydantic-*.dist-info"
   "pydantic_core-*.dist-info"
   "pydantic_settings-*.dist-info"
@@ -345,6 +407,8 @@ printf '%s\n' "$local_manifest" > "$temp_root/.manifest"
 
 rm -rf "$RUNTIME_ROOT"
 mv "$temp_root" "$RUNTIME_ROOT"
+COPYFILE_DISABLE=1 "$RUNTIME_ROOT/run_bridge.sh" revision > "$RUNTIME_ROOT/.revision"
+/bin/zsh "$ROOT_DIR/scripts/stop_runtime.sh"
 xattr -cr "$RUNTIME_ROOT" 2>/dev/null || true
 
 echo "Cleo runtime installed."

@@ -67,6 +67,16 @@ The long-term direction is clear: one personal assistant, shared memory across s
 - ChatGPT export import pipeline
 - CLI, API, desktop, and mobile app surfaces sharing the same core
 - Voice input support and optional wake-word path
+- Cleo Pulse: opt-in app awareness, research link collection, persistent goals,
+  quiet check-in suggestions, and an activity feed accessible from the overlay
+
+Pulse is a proactive foundation, not unrestricted autonomous control. It does not
+silently send messages or execute suggestions. See [Cleo Pulse](docs/proactive-assistant.md)
+for controls, privacy limitations, and the live verification checklist.
+
+Pulse's Files tab provides opt-in folder indexing, bounded document excerpts,
+retrieved source links, and a live runtime check. See [File Evidence](docs/file-evidence.md)
+for supported formats, access boundaries, and limitations.
 
 ## Product Shape
 
@@ -269,8 +279,36 @@ Build and run:
 
 ```bash
 cd /Users/apollo/Desktop/Cleo/apps/desktop-macos
+./scripts/install_runtime.sh
 ./scripts/build_app.sh
-open dist/Cleo.app
+open "$HOME/Applications/Cleo.app"
+```
+
+The app starts its local backend automatically. The default installer puts Python
+dependencies in `~/Library/Application Support/Cleo/venv` and copies the backend
+there, avoiding Desktop/iCloud placeholders. The Swift build cache lives in
+`~/Library/Caches/Cleo/swift-build`; rebuilding replaces the app bundle while
+keeping that cache. Model weights download on first use and stay in Application
+Support. A separate Uvicorn server is not required for the desktop app.
+The signed app is installed at `~/Applications/Cleo.app`. The previous
+`apps/desktop-macos/dist/Cleo.app` path is a symlink to that installation. Bundle
+assembly and signing happen outside Desktop to avoid File Provider metadata
+that can invalidate signing.
+
+The first build creates a reusable local code-signing certificate in your login
+keychain. macOS may ask you to unlock the keychain or confirm code-signing trust
+once. Later builds reuse that certificate, so privacy grants can recognize the
+updated app. Keep `~/Library/Application Support/Cleo/signing` and the
+`Cleo Local Development` identity in Keychain Access. To use an existing Apple
+signing identity instead, set `CLEO_CODE_SIGN_IDENTITY` before building and keep
+using the same identity. The first transition from an ad-hoc build may require
+granting permissions again. Reopening the same signed app does not require a
+reset. The Cleo menu bar's **Permissions...** item opens macOS privacy settings.
+
+Runtime regression checks:
+
+```bash
+"$HOME/Library/Application Support/Cleo/venv/bin/python3" -m unittest discover -s tests -v
 ```
 
 Main interaction patterns:

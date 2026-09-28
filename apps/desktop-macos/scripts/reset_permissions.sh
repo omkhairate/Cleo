@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_BUNDLE_ID="ai.cleo.desktop"
-APP_PATH="/Users/apollo/Desktop/Cleo/apps/desktop-macos/dist/Cleo.app"
+APP_PATH="${CLEO_INSTALL_DIR:-$HOME/Applications}/Cleo.app"
 
 echo "Quitting Cleo if it is running..."
 pkill -f '/Cleo.app/Contents/MacOS/CleoOverlay' 2>/dev/null || true
@@ -12,6 +12,7 @@ tccutil reset Accessibility "$APP_BUNDLE_ID" 2>/dev/null || true
 tccutil reset ScreenCapture "$APP_BUNDLE_ID" 2>/dev/null || true
 tccutil reset Microphone "$APP_BUNDLE_ID" 2>/dev/null || true
 tccutil reset SpeechRecognition "$APP_BUNDLE_ID" 2>/dev/null || true
+defaults delete "$APP_BUNDLE_ID" cleo.permissions.screenRecordingRequested 2>/dev/null || true
 
 echo ""
 echo "Next:"

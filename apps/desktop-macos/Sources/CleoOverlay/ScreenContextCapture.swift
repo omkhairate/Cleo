@@ -33,7 +33,8 @@ final class ScreenContextCapture {
     }
 
     private let focusSize = CGSize(width: 180, height: 110)
-    private var hasRequestedScreenRecordingAccess = false
+    private let fastGlanceTextThreshold = 26
+    private let screenRecordingRequestKey = "cleo.permissions.screenRecordingRequested"
 
     func selectionCaptureStatus(promptIfNeeded: Bool = false) -> SelectionCaptureStatus {
         if isAccessibilityTrusted(promptIfNeeded: promptIfNeeded) {
@@ -84,12 +85,68 @@ final class ScreenContextCapture {
         )
     }
 
+    func captureDisplayContext(at point: NSPoint) -> OverlayVisualContext? {
+        guard screenCaptureStatus(promptIfNeeded: false) == .ready,
+              let capture = captureWindowOrDisplay(around: point, fullDisplay: true) else {
+            return nil
+        }
+
+        // Keep the whole image even when there is little text near the pointer.
+        // Window-context is the existing full visual route understood by the backend.
+        return OverlayVisualContext(
+            source: ContextSource.windowContext,
+            summary: "Full screen captured. The pointer marks the area you are asking about.",
+            selected_text: nil,
+            ocr_text: nil,
+            image_path: capture.imagePath,
+            region_description: windowRegionDescription(
+                captureFrame: capture.captureFrame,
+                pointer: point,
+                appName: capture.appName,
+                scope: capture.scope
+            )
+        )
+    }
+
     func captureWindowContext(at point: NSPoint) -> OverlayVisualContext? {
         guard screenCaptureStatus(promptIfNeeded: false) == .ready else {
             return nil
         }
         guard let capture = captureWindowOrDisplay(around: point) else {
             return nil
+        }
+
+        let focusImage = cropFocusRegion(
+            from: capture.image,
+            captureFrame: capture.captureFrame,
+            pointer: point,
+            size: focusSize
+        )
+        let focusImagePath = writeImage(focusImage) ?? capture.imagePath
+        let focusOCR = recognizeText(in: focusImage)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if shouldPreferFastVisualGlance(focusOCR: focusOCR) {
+            let summary = fastVisualGlanceSummaryText(
+                focusOCR: focusOCR,
+                appName: capture.appName,
+                scope: capture.scope
+            )
+            let regionDescription = pointerFocusRegionDescription(
+                captureFrame: capture.captureFrame,
+                pointer: point,
+                appName: capture.appName,
+                scope: capture.scope
+            )
+
+            return OverlayVisualContext(
+                source: ContextSource.pointerFocus,
+                summary: summary,
+                selected_text: nil,
+                ocr_text: combinedOCRText(label: "Pointer focus OCR", text: focusOCR),
+                image_path: focusImagePath,
+                region_description: regionDescription
+            )
         }
 
         let windowOCR = recognizeText(in: capture.image)
@@ -155,10 +212,10 @@ final class ScreenContextCapture {
            let selectionContext = captureExplicitSelectionContext(from: selectedText) {
             return selectionContext
         }
-        return captureWindowContext(at: point)
+        return captureDisplayContext(at: point)
     }
 
-    private func captureWindowOrDisplay(around point: NSPoint) -> PointerCaptureSnapshot? {
+    private func captureWindowOrDisplay(around point: NSPoint, fullDisplay: Bool = false) -> PointerCaptureSnapshot? {
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(point, $0.frame, false) }) ?? NSScreen.main else {
             return nil
         }
@@ -175,7 +232,7 @@ final class ScreenContextCapture {
 
         let captureFrame: CGRect
         let scope: String
-        if let windowFrame = focusedWindowFrame(),
+        if !fullDisplay, let windowFrame = focusedWindowFrame(),
            windowFrame.intersects(screenFrame),
            windowFrame.width > 80,
            windowFrame.height > 80 {
@@ -191,7 +248,8 @@ final class ScreenContextCapture {
         let captureWidth = captureFrame.width
         let captureHeight = captureFrame.height
 
-        let topLeftY = screenFrame.maxY - clampedY - captureHeight
+        let desktopTop = NSScreen.screens.first?.frame.maxY ?? screenFrame.maxY
+        let topLeftY = desktopTop - clampedY - captureHeight
         let captureRect = "\(Int(clampedX)),\(Int(topLeftY)),\(Int(captureWidth)),\(Int(captureHeight))"
 
         let process = Process()
@@ -413,8 +471,8 @@ final class ScreenContextCapture {
             if CGPreflightScreenCaptureAccess() {
                 return true
             }
-            if promptIfNeeded, !hasRequestedScreenRecordingAccess {
-                hasRequestedScreenRecordingAccess = true
+            if promptIfNeeded, !UserDefaults.standard.bool(forKey: screenRecordingRequestKey) {
+                UserDefaults.standard.set(true, forKey: screenRecordingRequestKey)
                 return CGRequestScreenCaptureAccess()
             }
             return false
@@ -539,6 +597,29 @@ final class ScreenContextCapture {
         return "A \(scopeDescription) capture from the current display was attached. No readable text was detected near the pointer."
     }
 
+    private func fastVisualGlanceSummaryText(
+        focusOCR: String?,
+        appName: String?,
+        scope: String
+    ) -> String? {
+        let scopeDescription = scope == "window" ? "window" : "display"
+        if let focusOCR, !focusOCR.isEmpty {
+            let lines = focusOCR
+                .split(separator: "\n")
+                .map(String.init)
+                .filter { !$0.isEmpty }
+            if !lines.isEmpty {
+                let prefix = appName.map { "Fast visual glance from \($0)'s \(scopeDescription). " } ?? "Fast visual glance from the current \(scopeDescription). "
+                return prefix + "Nearby text: " + lines.prefix(2).joined(separator: " | ")
+            }
+        }
+
+        if let appName {
+            return "Fast visual glance from \(appName)'s \(scopeDescription). Little or no readable text was found near the pointer."
+        }
+        return "Fast visual glance from the current \(scopeDescription). Little or no readable text was found near the pointer."
+    }
+
     private func windowSummaryText(
         ocrText: String?,
         appName: String?,
@@ -597,5 +678,20 @@ final class ScreenContextCapture {
             "Use the broader application context while still prioritizing the area near the user's invocation point. " +
             "Pointer position within the attached display is approximately x \(xFraction)% and y \(yFraction)% from the bottom-left. " +
             "\(scopeDescription.capitalized) size: \(Int(captureFrame.width))x\(Int(captureFrame.height))."
+    }
+
+    private func shouldPreferFastVisualGlance(focusOCR: String?) -> Bool {
+        guard let focusOCR else {
+            return true
+        }
+
+        let trimmed = focusOCR.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return true
+        }
+
+        let alphanumericCount = trimmed.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.count
+        let lineCount = trimmed.split(separator: "\n").count
+        return alphanumericCount < fastGlanceTextThreshold && lineCount <= 2
     }
 }

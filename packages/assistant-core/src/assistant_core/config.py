@@ -8,6 +8,12 @@ class Settings(BaseSettings):
     env: str = "development"
     api_url: str = "http://127.0.0.1:8000"
     routing_mode: str = "local-only"
+    text_model_provider: str = "transformers-text"
+    text_model_id: str = "HuggingFaceTB/SmolLM2-360M-Instruct"
+    text_model_timeout_seconds: float = 120.0
+    text_max_new_tokens: int = 192
+    compact_max_new_tokens: int = 64
+    visual_max_new_tokens: int = 128
     local_model_provider: str = "transformers-smolvlm"
     local_model_id: str = "HuggingFaceTB/SmolVLM-500M-Instruct"
     local_model_base_url: str = ""

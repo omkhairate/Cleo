@@ -35,6 +35,7 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         )
         panel.delegate = self
         panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.titleVisibility = .hidden
@@ -99,7 +100,7 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func showCentered() {
+    func showCentered() {
         guard let panel else { return }
 
         viewModel.summonStyle = .centered
@@ -127,6 +128,8 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         preferredAnchorPoint = point
         viewModel.setVisualContext(nil)
         let normalizedSelectedText = selectedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A previous prompt must not become part of the next screen capture.
+        panel.orderOut(nil)
         let routeResult = resolvePointerPinnedRoute(
             at: point,
             selectedText: normalizedSelectedText,
@@ -147,17 +150,17 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         case .windowContext:
             if let context = routeResult.context {
                 viewModel.setVisualContext(context)
-                viewModel.footer = context.summary.map { "Full app context ready • \($0)" } ?? "Full app context ready"
+                viewModel.footer = context.summary ?? "Full screen context ready"
             }
         case .selectionPermissionBlocked:
-            viewModel.footer = "Selection capture needs macOS Accessibility access for Cleo."
+            viewModel.footer = "Enable Accessibility for Cleo in its menu bar Permissions settings."
         case .screenRecordingBlocked:
-            viewModel.footer = "Full app context needs macOS Screen Recording access for Cleo."
+            viewModel.footer = "Enable Screen Recording for Cleo in its menu bar Permissions settings."
         case .captureFailed:
             if hadRecentSelectionIntent {
                 viewModel.footer = "Cleo saw a recent selection, but macOS did not expose the highlighted text. Re-select it, then double-right-click again."
             } else {
-                viewModel.footer = "Cleo could not capture the current app window yet. If Screen Recording is already enabled, fully quit and reopen Cleo once."
+                viewModel.footer = "Cleo could not capture the current screen yet. If Screen Recording is already enabled, fully quit and reopen Cleo once."
             }
         }
 
@@ -204,7 +207,7 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
             return (.screenRecordingBlocked, nil)
         }
 
-        if let context = screenContextCapture.captureWindowContext(at: point) {
+        if let context = screenContextCapture.captureDisplayContext(at: point) {
             return (.windowContext, context)
         }
 
@@ -224,13 +227,16 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
 
     private func resizePanel(animated: Bool) {
         guard let panel else { return }
-        guard let screen = NSScreen.main else { return }
+        let anchoredScreen = preferredAnchorPoint.flatMap { point in
+            NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+        }
+        guard let screen = anchoredScreen ?? NSScreen.main else { return }
 
         let visibleFrame = screen.visibleFrame
         let width = currentPanelWidth
         let height = viewModel.preferredHeight
         let horizontalPadding: CGFloat = 16
-        let verticalPadding: CGFloat = 18
+        let verticalPadding: CGFloat = 8
         let x: CGFloat
         let y: CGFloat
 
@@ -242,6 +248,13 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
             viewModel.anchorXFraction = 0.5
         case .pointerPinned:
             let anchor = preferredAnchorPoint ?? NSPoint(x: visibleFrame.midX, y: visibleFrame.maxY - 90)
+            if viewModel.presentationState == .compact {
+                let placement = PointerPromptPlacement.make(anchor: anchor, visibleFrame: visibleFrame, size: NSSize(width: width, height: height))
+                viewModel.anchorEdge = placement.edge
+                viewModel.anchorXFraction = placement.tailFraction
+                panel.setFrame(placement.frame, display: true)
+                return
+            }
             x = min(
                 max(anchor.x - (width / 2), visibleFrame.minX + horizontalPadding),
                 visibleFrame.maxX - width - horizontalPadding
@@ -274,9 +287,10 @@ final class OverlayPanelController: NSObject, NSWindowDelegate {
         guard let contentView = panel.contentView else { return }
 
         contentView.wantsLayer = true
-        contentView.layer?.cornerRadius = currentCornerRadius
+        let pointerPrompt = viewModel.summonStyle == .pointerPinned && viewModel.presentationState == .compact
+        contentView.layer?.cornerRadius = pointerPrompt ? 0 : currentCornerRadius
         contentView.layer?.cornerCurve = .continuous
-        contentView.layer?.masksToBounds = true
+        contentView.layer?.masksToBounds = !pointerPrompt
     }
 }
 

@@ -15,11 +15,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        guard claimSingleInstance() else { return }
 
         let controller = OverlayPanelController()
         controller.prepare()
         overlayController = controller
         configureStatusItem()
+        ProactiveController.shared.start()
 
         let pointerTracker = PointerTracker()
         pointerTracker.selectionProvider = { [weak controller] in
@@ -50,10 +52,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         wakeWordEnabled = UserDefaults.standard.bool(forKey: WakeWordPreferences.enabledKey)
     }
 
+    private func claimSingleInstance() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return true }
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let currentPath = Bundle.main.bundleURL.standardizedFileURL.path
+        let otherCopies = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != currentPID && !$0.isTerminated }
+
+        if let existing = otherCopies.first(where: { $0.bundleURL?.standardizedFileURL.path == currentPath }) {
+            existing.activate(options: [.activateAllWindows])
+            NSApp.terminate(nil)
+            return false
+        }
+
+        // A relocated, freshly installed app replaces copies from the old bundle path.
+        for copy in otherCopies {
+            copy.terminate()
+        }
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        ProactiveController.shared.stop()
         hotKeyManager?.unregister()
         pointerTracker?.stop()
         wakeWordController?.stop()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showAssistant()
+        return false
+    }
+
+    func showAssistant() {
+        overlayController?.showCentered()
     }
 
     private func configureStatusItem() {
@@ -121,6 +153,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    @objc private func openPrivacySettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     @objc private func toggleWakeWordListening() {
         if wakeWordEnabled {
             disableWakeWordListening()
@@ -145,6 +182,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(
             withTitle: "Open Speech Settings",
             action: #selector(openSpeechSettings),
+            keyEquivalent: ""
+        )
+        menu.addItem(
+            withTitle: "Permissions...",
+            action: #selector(openPrivacySettings),
             keyEquivalent: ""
         )
         menu.addItem(

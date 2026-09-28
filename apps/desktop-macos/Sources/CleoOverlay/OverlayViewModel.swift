@@ -33,6 +33,7 @@ enum OverlayMemoryPanelTab: String, CaseIterable, Identifiable {
 
 @MainActor
 final class OverlayViewModel: ObservableObject {
+    typealias ConversationTurn = OverlayConversationTurn
     private enum SpeechSetupPreferences {
         static let wakeWordEnabledKey = "cleo.wakeWordEnabled"
         static let onboardingDismissedKey = "cleo.dismissedSpeechSetupCard"
@@ -41,13 +42,35 @@ final class OverlayViewModel: ObservableObject {
     private let defaultResponse = "Ask Cleo anything, or let it turn a request into a command workflow."
 
     @Published var query = ""
+    @Published var composerFocusRequest = 0
     @Published var response = ""
-    @Published var footer: String?
+    @Published var conversationTurns: [ConversationTurn] = []
+    @Published var submittedPrompt = ""
+    private var conversationID = UUID().uuidString
+    private let conversationStore: ConversationSessionStore
+    @Published var runtimeDetails: String?
+
+    var hasConversation: Bool { !submittedPrompt.isEmpty || !conversationTurns.isEmpty }
+    @Published var footer: String? {
+        didSet {
+            if presentationState == .compact {
+                onLayoutChange?()
+            }
+        }
+    }
     @Published var isLoading = false
-    @Published var visualContext: OverlayVisualContext?
+    @Published var visualContext: OverlayVisualContext? {
+        didSet {
+            if presentationState == .compact {
+                onLayoutChange?()
+            }
+        }
+    }
     @Published var responseMode: OverlayResponseMode = .fast
     @Published var lastInteractionMode = "chat"
     @Published var commandTasks: [OverlayCommandTask] = []
+    @Published var routeClassification: OverlayRequestClassification?
+    @Published var routeCandidates: [OverlayRouteCandidate] = []
     @Published var memorySnapshot: OverlayMemorySnapshot?
     @Published var isShowingMemoryPanel = false
     @Published var importStatus: String?
@@ -73,9 +96,8 @@ final class OverlayViewModel: ObservableObject {
         }
     }
 
-    private let api = CleoAPIClient()
+    private let api = CleoAPIClient.shared
     private let voiceInput = VoiceInputController()
-    private var progressTask: Task<Void, Never>?
     private var submissionTask: Task<Void, Never>?
     private var activeRequestID = UUID()
     var onLayoutChange: (() -> Void)?
@@ -84,24 +106,44 @@ final class OverlayViewModel: ObservableObject {
         if presentationState == .expanded {
             return 468
         }
-        return summonStyle == .pointerPinned ? 118 : 92
+        if summonStyle == .pointerPinned {
+            return 108
+        }
+        return hasCenteredCompactDetail ? 120 : 92
     }
 
     var preferredWidth: CGFloat {
         if presentationState == .compact {
-            return summonStyle == .pointerPinned ? 520 : 760
+            return summonStyle == .pointerPinned ? 360 : 760
         }
         return isShowingMemoryPanel ? 760 + workspacePanelWidth + 18 : 760
     }
 
-    init() {
+    init(conversationStore: ConversationSessionStore = ConversationSessionStore(), warmup: Bool = true) {
+        self.conversationStore = conversationStore
         response = defaultResponse
+        restoreConversation()
         refreshSpeechSetupState()
         configureVoiceInput()
+        if warmup {
+            Task { [api] in
+                await api.warmup(textOnly: true)
+            }
+        }
     }
 
     var shouldShowSpeechSetupCard: Bool {
         !wakeWordEnabled && !speechSetupDismissed
+    }
+
+    private var hasCenteredCompactDetail: Bool {
+        guard summonStyle == .centered, presentationState == .compact else {
+            return false
+        }
+        if visualContext?.selected_text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+            return true
+        }
+        return footer?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     func submit() {
@@ -109,14 +151,26 @@ final class OverlayViewModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
 
         cancelCurrentInteraction(resetState: false)
+        if !submittedPrompt.isEmpty {
+            conversationTurns.append(ConversationTurn(prompt: submittedPrompt, reply: response))
+            if conversationTurns.count > 30 { conversationTurns.removeFirst() }
+        }
+        submittedPrompt = trimmed
+        query = ""
+        let requestContext = visualContext
+        let requestConversationID = conversationID
         let requestID = UUID()
         activeRequestID = requestID
         presentationState = .expanded
         isLoading = true
-        response = "Thinking..."
+        response = ""
         footer = nil
+        runtimeDetails = nil
         commandTasks = []
+        routeClassification = nil
+        routeCandidates = []
         startProgress(for: trimmed)
+        saveConversation()
 
         submissionTask = Task { [weak self] in
             guard let self else { return }
@@ -124,7 +178,8 @@ final class OverlayViewModel: ObservableObject {
             do {
                 try await self.api.sendAutoStreaming(
                     message: trimmed,
-                    visualContext: self.visualContext,
+                    conversationID: requestConversationID,
+                    visualContext: requestContext,
                     responseMode: self.responseMode
                 ) { [weak self] event in
                     guard let self else { return }
@@ -133,9 +188,23 @@ final class OverlayViewModel: ObservableObject {
                         if let mode = event.mode {
                             self.lastInteractionMode = mode
                         }
+                        if let classification = event.classification {
+                            self.routeClassification = classification
+                            self.lastInteractionMode = classification.mode
+                            self.startProgress(for: trimmed)
+                        }
+                        if let routeCandidates = event.route_candidates {
+                            self.routeCandidates = routeCandidates
+                        }
                         switch event.type {
+                        case "delta":
+                            self.activeProgressStep = "Answering"
+                            if let partial = event.response {
+                                self.response += partial
+                            }
                         case "planned":
                             self.commandTasks = event.tasks ?? []
+                            self.activeProgressStep = "Running actions"
                         case "task":
                             if let task = event.task {
                                 if let index = self.commandTasks.firstIndex(where: { $0.task_id == task.task_id }) {
@@ -143,12 +212,15 @@ final class OverlayViewModel: ObservableObject {
                                 } else {
                                     self.commandTasks.append(task)
                                 }
+                                self.activeProgressStep = self.commandTasks.allSatisfy { $0.status == "completed" || $0.status == "blocked" }
+                                    ? "Finishing response" : "Running actions"
                             }
                         case "final":
                             receivedFinal = true
                             self.response = event.response ?? self.response
                             let footerParts = [event.mode?.uppercased(), event.summary, event.provider, event.model].compactMap { $0 }
-                            self.footer = footerParts.isEmpty ? nil : footerParts.joined(separator: " • ")
+                            self.runtimeDetails = footerParts.isEmpty ? nil : footerParts.joined(separator: " • ")
+                            self.footer = nil
                             if let tasks = event.tasks {
                                 self.commandTasks = tasks
                             }
@@ -160,20 +232,9 @@ final class OverlayViewModel: ObservableObject {
                 }
                 guard !Task.isCancelled else { return }
                 if !receivedFinal {
-                    let fallback = try await self.api.sendAuto(
-                        message: trimmed,
-                        visualContext: self.visualContext,
-                        responseMode: self.responseMode
-                    )
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run {
-                        guard self.activeRequestID == requestID else { return }
-                        self.lastInteractionMode = fallback.mode
-                        self.commandTasks = fallback.tasks
-                        self.response = fallback.text
-                        self.footer = fallback.footer
-                        self.finishCurrentInteraction(for: requestID)
-                    }
+                    throw NSError(domain: "CleoRuntime", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: "The response ended before completion. Check the task results before trying again.",
+                    ])
                 }
             } catch is CancellationError {
                 await MainActor.run {
@@ -182,8 +243,9 @@ final class OverlayViewModel: ObservableObject {
             } catch {
                 await MainActor.run {
                     guard self.activeRequestID == requestID else { return }
-                    self.response = "Cleo could not reach the API.\n\n\(error.localizedDescription)"
-                    self.footer = "Check CLEO_API_URL and make sure the backend is running."
+                    let failure = "Cleo could not complete this request.\n\n\(error.localizedDescription)"
+                    self.response = self.response.isEmpty ? failure : "\(self.response)\n\n\(failure)"
+                    self.footer = "Request stopped"
                     self.finishCurrentInteraction(for: requestID, preserveResponse: true)
                 }
             }
@@ -194,24 +256,60 @@ final class OverlayViewModel: ObservableObject {
         voiceInput.stop(sendFinalTranscript: false)
         cancelCurrentInteraction(resetState: true)
         query = ""
+        submittedPrompt = ""
+        conversationTurns = []
+        conversationID = UUID().uuidString
         response = defaultResponse
         footer = nil
+        runtimeDetails = nil
         visualContext = nil
         importStatus = nil
         commandTasks = []
+        routeClassification = nil
+        routeCandidates = []
         presentationState = .compact
+        saveConversation()
+    }
+
+    func copyResponse() {
+        guard !response.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(response, forType: .string)
+    }
+
+    func editLastRequest() {
+        guard !submittedPrompt.isEmpty, !isLoading else { return }
+        query = submittedPrompt
+        focusComposer()
+    }
+
+    func detachVisualContext() {
+        guard !isLoading else { return }
+        visualContext = nil
+        routeClassification = nil
+        routeCandidates = []
+    }
+
+    func stopCurrentRequest() {
+        voiceInput.stop(sendFinalTranscript: false)
+        cancelCurrentInteraction(resetState: true)
+        if response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            response = "Stopped."
+        }
+        if footer == nil || footer?.isEmpty == true {
+            footer = "Request stopped"
+        } else {
+            footer = "Request stopped"
+        }
+        saveConversation()
     }
 
     func focusComposer() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            NSApp.keyWindow?.makeFirstResponder(nil)
-        }
+        composerFocusRequest += 1
     }
 
     func prepareForPresentation() {
-        if !isLoading {
-            presentationState = .compact
-        }
+        presentationState = hasConversation && summonStyle == .centered ? .expanded : .compact
     }
 
     func expand() {
@@ -220,9 +318,10 @@ final class OverlayViewModel: ObservableObject {
 
     func collapse() {
         voiceInput.stop(sendFinalTranscript: false)
-        cancelCurrentInteraction(resetState: false)
+        cancelCurrentInteraction(resetState: true)
         presentationState = .compact
         isShowingMemoryPanel = false
+        saveConversation()
     }
 
     func toggleVoiceInput() {
@@ -238,7 +337,7 @@ final class OverlayViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if case let .failure(error) = result {
-                    self.presentSpeechSetupHelp()
+                    self.presentSpeechSetupHelpIfNeeded(for: error)
                     self.footer = error.localizedDescription
                     self.refreshSpeechSetupState()
                 }
@@ -254,7 +353,7 @@ final class OverlayViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if case let .failure(error) = result {
-                    self.presentSpeechSetupHelp()
+                    self.presentSpeechSetupHelpIfNeeded(for: error)
                     self.footer = error.localizedDescription
                     self.refreshSpeechSetupState()
                 }
@@ -302,7 +401,20 @@ final class OverlayViewModel: ObservableObject {
         UserDefaults.standard.set(false, forKey: SpeechSetupPreferences.onboardingDismissedKey)
     }
 
+    private func presentSpeechSetupHelpIfNeeded(for error: Error) {
+        switch error as? VoiceInputError {
+        case .speechPermissionDenied?, .microphonePermissionDenied?:
+            presentSpeechSetupHelp()
+        default:
+            break
+        }
+    }
+
     func setVisualContext(_ context: OverlayVisualContext?) {
+        if !isLoading {
+            routeClassification = nil
+            routeCandidates = []
+        }
         guard let context else {
             visualContext = nil
             return
@@ -400,36 +512,18 @@ final class OverlayViewModel: ObservableObject {
 
     private func startProgress(for message: String) {
         stopProgress()
-        let lowered = message.lowercased()
-        let isCommandLike =
-            lowered.contains("open ") ||
-            lowered.contains("inspect") ||
-            lowered.contains("read") ||
-            lowered.contains("remember") ||
-            lowered.contains("plan") ||
-            lowered.contains(" and ") ||
-            lowered.contains(" then ")
-
-        progressSteps = isCommandLike
-            ? ["Routing request", "Running specialists", responseMode == .reviewed ? "Reviewing answer" : "Preparing response"]
-            : ["Reading context", responseMode == .reviewed ? "Reviewing answer" : "Drafting answer"]
-        activeProgressStep = progressSteps.first
-
-        progressTask = Task { @MainActor in
-            guard !progressSteps.isEmpty else { return }
-            var index = 0
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 900_000_000)
-                if Task.isCancelled { break }
-                index = min(index + 1, progressSteps.count - 1)
-                activeProgressStep = progressSteps[index]
-            }
+        let effectiveMode = routeClassification?.mode ?? inferredMode(for: message)
+        if effectiveMode == "command" {
+            progressSteps = ["Planning actions", "Running actions", "Finishing response"]
+        } else if routeClassification?.stack == "visual" {
+            progressSteps = ["Asking visual model", "Answering"]
+        } else {
+            progressSteps = ["Asking model", "Answering"]
         }
+        activeProgressStep = routeClassification == nil ? "Routing request" : progressSteps.first
     }
 
     private func stopProgress() {
-        progressTask?.cancel()
-        progressTask = nil
         activeProgressStep = nil
         progressSteps = []
     }
@@ -452,20 +546,45 @@ final class OverlayViewModel: ObservableObject {
         if !preserveResponse, response.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             response = defaultResponse
         }
+        saveConversation()
+    }
+
+    private func saveConversation() {
+        do {
+            try conversationStore.save(OverlayConversationSession(
+                version: 1, conversationID: conversationID, turns: conversationTurns,
+                submittedPrompt: submittedPrompt, response: response, wasLoading: isLoading
+            ))
+        } catch {
+            footer = "Could not save this conversation: \(error.localizedDescription)"
+        }
+    }
+
+    private func restoreConversation() {
+        do {
+            guard let session = try conversationStore.load() else { return }
+            conversationID = session.conversationID
+            conversationTurns = Array(session.turns.suffix(30))
+            submittedPrompt = session.submittedPrompt
+            response = session.response
+            if session.wasLoading {
+                response += "\n\nThis request was interrupted. Check any completed actions before trying again."
+            }
+            if !hasConversation { response = defaultResponse }
+        } catch {
+            NSLog("Cleo could not restore its conversation: %@", error.localizedDescription)
+        }
     }
 
     private func configureVoiceInput() {
         voiceInput.onStateChange = { [weak self] listening in
-            Task { @MainActor in
                 self?.isListening = listening
                 if listening {
                     self?.footer = "Listening..."
                 }
-            }
         }
 
         voiceInput.onTranscript = { [weak self] transcript, isFinal in
-            Task { @MainActor in
                 self?.query = transcript
                 if isFinal {
                     guard let self else { return }
@@ -476,16 +595,12 @@ final class OverlayViewModel: ObservableObject {
                     self.footer = "Voice captured • Sending..."
                     self.submit()
                 }
-            }
         }
 
         voiceInput.onError = { [weak self] message in
-            Task { @MainActor in
                 self?.isListening = false
-                self?.presentSpeechSetupHelp()
                 self?.footer = message
                 self?.refreshSpeechSetupState()
-            }
         }
     }
 
@@ -495,5 +610,83 @@ final class OverlayViewModel: ObservableObject {
             return true
         }
         return defaults.bool(forKey: SpeechSetupPreferences.onboardingDismissedKey)
+    }
+
+    private func progressStepsForCurrentContext() -> [String] {
+        guard let visualContext else {
+            return ["Preparing request"]
+        }
+
+        switch visualContext.source {
+        case "explicit-selection":
+            return ["Reading selection"]
+        case "pointer-focus":
+            if visualContext.ocr_text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                return ["Capturing context", "Reading nearby text"]
+            }
+            return ["Capturing context"]
+        case "window-context":
+            return ["Capturing context", "Reading text"]
+        default:
+            return ["Reading context"]
+        }
+    }
+
+    private func inferredMode(for message: String) -> String {
+        let lowered = message.lowercased()
+        let isCommandLike =
+            lowered.contains("open ") ||
+            lowered.contains("inspect") ||
+            lowered.contains("read") ||
+            lowered.contains("remember") ||
+            lowered.contains("plan") ||
+            lowered.contains(" and ") ||
+            lowered.contains(" then ")
+        return isCommandLike ? "command" : "chat"
+    }
+
+    var routeDisplayLabel: String {
+        guard let routeClassification else {
+            return "Auto"
+        }
+
+        var parts: [String] = [routeClassification.mode.uppercased()]
+        if let stack = routeClassification.stack, !stack.isEmpty {
+            parts.append(stack.uppercased())
+        }
+        if let intent = routeClassification.intent, !intent.isEmpty {
+            parts.append(intent)
+        }
+        if let targetApp = routeClassification.target_app, !targetApp.isEmpty {
+            parts.append(targetApp)
+        }
+        return parts.joined(separator: " • ")
+    }
+
+    var routeReasonText: String? {
+        routeClassification?.reason?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? routeClassification?.reason
+            : nil
+    }
+
+    var routeCandidateSummary: String? {
+        let fallbackCandidates = routeCandidates.dropFirst().prefix(2).compactMap { candidate -> String? in
+            var parts = [candidate.mode.uppercased()]
+            if let stack = candidate.stack, !stack.isEmpty {
+                parts.append(stack.uppercased())
+            }
+            if let intent = candidate.intent, !intent.isEmpty {
+                parts.append(intent)
+            }
+            if let targetApp = candidate.target_app, !targetApp.isEmpty {
+                parts.append(targetApp)
+            }
+            let label = parts.joined(separator: " • ")
+            return label.isEmpty ? nil : label
+        }
+        guard !fallbackCandidates.isEmpty else {
+            return nil
+        }
+        return "Fallbacks: " + fallbackCandidates.joined(separator: "  ·  ")
     }
 }
